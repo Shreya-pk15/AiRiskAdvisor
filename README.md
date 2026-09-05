@@ -1,4 +1,4 @@
-# 🛡️ AI Project Intelligence & Risk Advisor — Milestone 1
+# 🛡️ AI Project Intelligence & Risk Advisor
 
 A modular, document-grounded Retrieval-Augmented Generation (RAG) application built with **Python**, **Streamlit**, **Sentence Transformers**, **ChromaDB**, and **Google Gemini API**.
 
