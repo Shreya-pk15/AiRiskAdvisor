@@ -1,0 +1,11 @@
+SPRINT REVIEW MEETING NOTES
+Project: Student Project Management System (SPMS)
+Date: September 02, 2026
+Attendees: Shreya (Lead), John (Backend), Alice (UI/UX)
+
+KEY DISCUSSION POINTS:
+1. Ingestion module completed ahead of schedule by John.
+2. Payment Integration Task is currently BLOCKED. The payment gateway provider has not issued the production API credentials. John cannot proceed until credentials arrive.
+3. Streamlit UI initial mockup designed by Alice. Search input and document uploaders are verified.
+4. Risk Identified: Memory usage spike during batch embedding of large PDF files. Solution is to use sentence-transformers in mini batches.
+5. Decision: Next sprint will focus on testing ChromaDB retrieval accuracy for multi-document projects.

@@ -1,0 +1,19 @@
+# Environment variables
+.env
+.env.example
+
+# Python cache & virtualenv
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+
+# ChromaDB data directory
+data/chroma/
+
+# Pytest / coverage
+.pytest_cache/
+.coverage
+htmlcov/

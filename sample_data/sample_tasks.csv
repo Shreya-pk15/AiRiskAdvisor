@@ -1,0 +1,6 @@
+Task_ID,Task_Name,Assignee,Status,Deadline,Notes
+TASK-101,PDF and DOCX Ingestion,John,Completed,2026-09-01,Passed all ingestion unit tests.
+TASK-102,Payment Gateway Integration,John,Blocked,2026-09-10,Blocked: Waiting for API credentials from payment gateway.
+TASK-103,Sentence Transformers Setup,Shreya,Completed,2026-09-03,Model all-MiniLM-L6-v2 loaded successfully.
+TASK-104,Streamlit Dashboard UI,Alice,In Progress,2026-09-08,Sidebar and file uploader layout finished.
+TASK-105,User Authentication Module,Shreya,Incomplete,2026-09-15,Scheduled for next sprint.
