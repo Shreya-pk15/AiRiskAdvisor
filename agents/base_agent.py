@@ -44,12 +44,15 @@ class BaseAgent(ABC):
         top_k: int,
         queries: Sequence[str],
     ) -> List[Dict[str, Any]]:
-        """Merge targeted searches by similarity and cap context at the requested depth."""
+        """Merge targeted searches fairly without comparing unrelated query distances."""
         limit = max(1, int(top_k))
         best_chunks: Dict[Tuple[str, str], Tuple[float, int, Dict[str, Any]]] = {}
+        chunks_by_query: List[List[Dict[str, Any]]] = []
         sequence = 0
 
         for query in queries:
+            query_chunks = []
+            seen_for_query = set()
             for chunk in retriever.retrieve(query=query, project_name=project_id, top_k=limit):
                 text = str(chunk.get("text", "")).strip()
                 if not text:
@@ -57,6 +60,10 @@ class BaseAgent(ABC):
                 metadata = chunk.get("metadata", {})
                 source = str(metadata.get("source") or chunk.get("source") or "Unknown Document")
                 key = (source, text)
+                if key in seen_for_query:
+                    continue
+                seen_for_query.add(key)
+                query_chunks.append(chunk)
                 try:
                     distance = float(chunk.get("distance", float("inf")))
                 except (TypeError, ValueError):
@@ -66,9 +73,29 @@ class BaseAgent(ABC):
                 if existing is None or distance < existing[0]:
                     best_chunks[key] = (distance, sequence, chunk)
                 sequence += 1
+            chunks_by_query.append(query_chunks)
 
-        ranked_chunks = sorted(best_chunks.values(), key=lambda item: (item[0], item[1]))
-        return [chunk for _, _, chunk in ranked_chunks[:limit]]
+        if limit == 1:
+            ranked_chunks = sorted(best_chunks.values(), key=lambda item: (item[0], item[1]))
+            return [chunk for _, _, chunk in ranked_chunks[:limit]]
+
+        selected = []
+        selected_keys = set()
+        for rank in range(max((len(items) for items in chunks_by_query), default=0)):
+            for query_chunks in chunks_by_query:
+                if rank >= len(query_chunks):
+                    continue
+                chunk = query_chunks[rank]
+                metadata = chunk.get("metadata", {})
+                source = str(metadata.get("source") or chunk.get("source") or "Unknown Document")
+                key = (source, str(chunk.get("text", "")).strip())
+                if key in selected_keys:
+                    continue
+                selected_keys.add(key)
+                selected.append(chunk)
+                if len(selected) == limit:
+                    return selected
+        return selected
 
     @staticmethod
     def _extract_source(chunk: Dict[str, Any]) -> str:

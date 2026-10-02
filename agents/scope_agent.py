@@ -7,6 +7,7 @@ from uploaded project documents using grounded RAG retrieval and Google Gemini A
 
 import logging
 import os
+import re
 import time
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -38,11 +39,11 @@ class ScopeExtractionAgent(BaseAgent):
     """
 
     TARGET_QUERIES = [
-        "project goals objectives scope expected outcomes",
-        "project deliverables features modules systems reports APIs documentation",
-        "milestones timeline deadlines target dates start date end date",
+        "project goals objectives scope expected outcomes and deliverables features modules systems reports APIs documentation",
+        "milestones planned sprint actual sprint project phases releases deadlines target dates schedule",
         "responsibilities assignments person team task role owner",
     ]
+    MILESTONE_DETAIL_QUERY = "planned sprint actual sprint product backlog milestones phase release iteration"
 
     def __init__(
         self,
@@ -182,10 +183,31 @@ class ScopeExtractionAgent(BaseAgent):
             }
 
     def _retrieve_targeted_chunks(self, project_id: str, top_k: int = 5) -> List[Dict[str, Any]]:
-        """Retrieve the most relevant chunks, capped by the configured depth."""
-        return self._search_targeted_chunks(
+        """Retrieve balanced scope context and include omitted structured milestone rows."""
+        chunks = self._search_targeted_chunks(
             self.retriever, project_id, top_k, self.TARGET_QUERIES
         )
+        if self._extract_structured_milestones(self._normalize_chunks(chunks)):
+            return chunks
+
+        detail_chunks = self.retriever.retrieve(
+            query=self.MILESTONE_DETAIL_QUERY,
+            project_name=project_id,
+            top_k=max(8, int(top_k) * 2),
+        )
+        existing = {
+            (chunk.get("source", ""), chunk.get("text", ""))
+            for chunk in self._normalize_chunks(chunks)
+        }
+        for chunk in detail_chunks:
+            normalized = self._normalize_chunks([chunk])
+            if not self._extract_structured_milestones(normalized):
+                continue
+            key = (normalized[0]["source"], normalized[0]["text"])
+            if key not in existing:
+                chunks.append(chunk)
+                existing.add(key)
+        return chunks
 
     def _extract_with_llm(self, retrieved_chunks: Sequence[Dict[str, Any]]) -> ScopeExtractionOutput:
         """Construct context and generate structured output via GeminiProvider."""
@@ -235,7 +257,121 @@ class ScopeExtractionAgent(BaseAgent):
         if not parsed_output.sources and unique_sources:
             parsed_output.sources = self._deduplicate(list(unique_sources))
 
+        known_responsibilities = {
+            (item.person.strip().casefold(), item.responsibility.strip().casefold())
+            for item in parsed_output.responsibilities
+        }
+        for item in self._extract_structured_responsibilities(normalized_chunks):
+            key = (item.person.casefold(), item.responsibility.casefold())
+            if key not in known_responsibilities:
+                parsed_output.responsibilities.append(item)
+                known_responsibilities.add(key)
+
+        known_milestones = {
+            (item.name.strip().casefold(), (item.target_date or "").strip().casefold())
+            for item in parsed_output.milestones
+        }
+        for item in self._extract_structured_milestones(normalized_chunks):
+            key = (item.name.casefold(), (item.target_date or "").casefold())
+            if key not in known_milestones:
+                parsed_output.milestones.append(item)
+                known_milestones.add(key)
+
         return self._apply_grounding_sanitization(parsed_output)
+
+    @staticmethod
+    def _extract_structured_responsibilities(
+        chunks: Sequence[Dict[str, Any]],
+    ) -> List[ResponsibilityItem]:
+        """Recover explicit task/assignee pairs from retrieved table rows."""
+        responsibilities = []
+        seen = set()
+        task_labels = {"task", "task_name", "work_item", "activity", "responsibility"}
+        person_labels = {"assignee", "owner", "assigned_to", "responsible_person"}
+
+        for chunk in chunks:
+            metadata = chunk.get("metadata", {})
+            source = metadata.get("source") or chunk.get("source") or "Unknown Document"
+            for line in chunk.get("text", "").splitlines():
+                evidence = line.strip()
+                line = re.sub(r"^\s*Record\s+\d+:\s*", "", line)
+                fields = {}
+                for label, value in re.findall(r"(?:^|\|)\s*([^:|]+):\s*([^|]+)", line):
+                    normalized_label = re.sub(r"[^a-z0-9]+", "_", label.casefold()).strip("_")
+                    fields[normalized_label] = value.strip()
+
+                task = next((fields[label] for label in task_labels if fields.get(label)), None)
+                person = next((fields[label] for label in person_labels if fields.get(label)), None)
+                if not task or not person:
+                    continue
+
+                key = (person.casefold(), task.casefold())
+                if key in seen:
+                    continue
+                seen.add(key)
+                page = metadata.get("page")
+                responsibilities.append(ResponsibilityItem(
+                    person=person,
+                    responsibility=task,
+                    source=str(source),
+                    document_name=str(source),
+                    document_id=metadata.get("document_id"),
+                    page=page if isinstance(page, int) else None,
+                    chunk_id=metadata.get("chunk_id"),
+                    evidence=evidence,
+                ))
+
+        return responsibilities
+
+    @staticmethod
+    def _extract_structured_milestones(
+        chunks: Sequence[Dict[str, Any]],
+    ) -> List[MilestoneItem]:
+        """Recover explicit milestone and sprint fields from retrieved table rows."""
+        milestones = []
+        seen = set()
+        milestone_labels = {
+            "planned_sprint", "actual_sprint", "milestone", "phase", "release", "iteration"
+        }
+        date_labels = {"target_date", "deadline", "due_date", "delivery_date"}
+
+        for chunk in chunks:
+            metadata = chunk.get("metadata", {})
+            source = metadata.get("source") or chunk.get("source") or "Unknown Document"
+            text = chunk.get("text", "")
+            rows = re.split(r"\bRow\s+\d+:\s*", text)
+            if len(rows) == 1:
+                rows = text.splitlines()
+
+            for row in rows:
+                fields = {}
+                for label, value in re.findall(r"(?:^|\|)\s*([^:|]+):\s*([^|]+)", row):
+                    normalized_label = re.sub(r"[^a-z0-9]+", "_", label.casefold()).strip("_")
+                    fields[normalized_label] = value.strip()
+
+                label = next((name for name in milestone_labels if fields.get(name)), None)
+                if not label:
+                    continue
+
+                name = fields[label]
+                target_date = next((fields[name] for name in date_labels if fields.get(name)), None)
+                key = (name.casefold(), (target_date or "").casefold())
+                if key in seen:
+                    continue
+                seen.add(key)
+                page = metadata.get("page")
+                milestones.append(MilestoneItem(
+                    name=name,
+                    target_date=target_date,
+                    source=str(source),
+                    document_name=str(source),
+                    document_id=metadata.get("document_id"),
+                    page=page if isinstance(page, int) else None,
+                    chunk_id=metadata.get("chunk_id"),
+                    evidence=row.strip(),
+                ))
+
+        return milestones
 
     def _apply_grounding_sanitization(self, output: ScopeExtractionOutput) -> ScopeExtractionOutput:
         """Enforce strict grounding rules across all extracted items."""

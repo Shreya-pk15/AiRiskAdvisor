@@ -373,32 +373,41 @@ st.markdown("""
     .api-status-ok   { display: inline-flex; align-items: center; gap: 5px; background: #052e16; color: #4ade80; padding: 3px 9px; border-radius: 6px; font-size: 0.75rem; font-weight: 700; border: 1px solid #166534; }
     .api-status-warn { display: inline-flex; align-items: center; gap: 5px; background: #1f0e0e; color: #f87171; padding: 3px 9px; border-radius: 6px; font-size: 0.75rem; font-weight: 700; border: 1px solid #991b1b; }
 
-    /* Enforced light surfaces and readable text, independent of OS theme. */
+    /* Consistent white theme with readable text and restrained teal accents. */
     :root { color-scheme: light; }
     html, body, .stApp, [data-testid="stAppViewContainer"] {
         background: #FFFFFF !important;
         color: #1F2937 !important;
     }
-    [data-testid="stHeader"] { background: rgba(255, 255, 255, 0.96) !important; }
+    [data-testid="stHeader"] { background: #FFFFFF !important; }
     section[data-testid="stSidebar"] {
-        background: #F8FAFC !important;
+        background: #FFFFFF !important;
         border-right: 1px solid #E2E8F0 !important;
     }
     section[data-testid="stSidebar"] * { color: #1F2937; }
-    .page-header, .kpi-card, .glass-card, .risk-card, .milestone-item,
+    .page-header {
+        background: #FFFFFF !important;
+        color: #1F2937 !important;
+        border-color: #E2E8F0 !important;
+        box-shadow: 0 2px 10px rgba(15, 23, 42, 0.05) !important;
+    }
+    .kpi-card, .glass-card, .risk-card, .milestone-item,
     .stTabs [data-baseweb="tab-list"] {
         background: #FFFFFF !important;
         color: #1F2937 !important;
         border-color: #E2E8F0 !important;
         box-shadow: 0 2px 10px rgba(15, 23, 42, 0.06) !important;
     }
-    .page-title, .kpi-value { color: #1F2937 !important; }
-    .page-subtitle, .kpi-sub, .kpi-label { color: #64748B !important; }
+    .page-title { color: #1F2937 !important; }
+    .page-subtitle { color: #64748B !important; }
+    .kpi-value { color: #1F2937 !important; }
+    .kpi-sub, .kpi-label { color: #64748B !important; }
     .stRadio > div > label {
         background: #F1F5F9 !important;
         color: #334155 !important;
         border-color: #E2E8F0 !important;
     }
+    section[data-testid="stSidebar"] .stRadio > div > label { color: #334155 !important; }
     .stRadio > div > label:hover { background: #E2E8F0 !important; color: #0F172A !important; }
     .stTabs [data-baseweb="tab"] { color: #475569 !important; }
     .stTabs [aria-selected="true"] { background: #0F766E !important; color: #FFFFFF !important; }
@@ -429,6 +438,10 @@ st.markdown("""
     .source-tag { background: #CCFBF1 !important; color: #115E59 !important; border-color: #99F6E4 !important; }
     .evidence-quote { background: #F8FAFC !important; color: #334155 !important; border-left-color: #0F766E !important; }
     .forecast-box { background: #FFFBEB !important; color: #78350F !important; border-color: #FDE68A !important; }
+    .provider-status { margin: 0.5rem 0 0; color: #334155 !important; font-size: 0.82rem; line-height: 1.5; }
+    .file-badge { background: #F8FAFC !important; color: #334155 !important; border-color: #CBD5E1 !important; }
+    main [data-testid="stMarkdownContainer"] * { color: #111827 !important; }
+    hr { border-color: #E2E8F0 !important; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -522,7 +535,6 @@ with st.sidebar:
 
     # Automatically scale retrieval depth with the size of the indexed workspace.
     top_k = retriever.automatic_top_k(kb_count)
-    st.caption(f"RETRIEVAL DEPTH (AUTO): {top_k} chunks")
 
     # AI Engine Provider
     st.caption("ACTIVE AI ENGINE")
@@ -534,9 +546,9 @@ with st.sidebar:
     )
 
     # Secure API Status (No keys shown)
-    groq_badge = '<span class="api-status-ok">✅ Groq Active</span>' if _groq_valid else '<span class="api-status-warn">❌ Groq Missing</span>'
-    gem_badge  = '<span class="api-status-ok">✅ Gemini Ready</span>' if _gemini_valid else '<span class="api-status-warn">⚠️ Gemini Inactive</span>'
-    st.markdown(f"<div style='margin-top: 6px;'>{groq_badge}&nbsp;&nbsp;{gem_badge}</div>", unsafe_allow_html=True)
+    groq_status = "✅ Groq Active" if _groq_valid else "❌ Groq Missing"
+    gemini_status = "✅ Gemini Ready" if _gemini_valid else "⚠️ Gemini Inactive"
+    st.markdown(f"<p class='provider-status'>{groq_status} · {gemini_status}</p>", unsafe_allow_html=True)
 
     st.markdown("<hr style='border: none; border-top: 1px solid rgba(255,255,255,0.08); margin: 1.2rem 0;'>", unsafe_allow_html=True)
     st.caption("SUPPORTED FORMATS")
@@ -1357,17 +1369,17 @@ elif selected_page == "🛑 Blockers & Actions":
                 st.markdown(f"""
                     <div class="risk-card" style="border-left: 4px solid #EF4444;">
                         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.4rem;">
-                            <strong style="font-size: 1.05rem; color: #F8FAFC;">{b.get('title', 'Blocker')}</strong>
+                            <strong style="font-size: 1.05rem; color: #111827;">{b.get('title', 'Blocker')}</strong>
                             <span class="sev-high">{cat.upper()}</span>
                         </div>
-                        <p style="font-size: 0.95rem; color: #CBD5E1; margin-bottom: 0.6rem;">{b.get('description', '')}</p>
-                        <div style="display: flex; gap: 20px; font-size: 0.85rem; color: #94A3B8; margin-bottom: 0.4rem;">
-                            <span>Owner: <strong style="color: #F8FAFC;">{b.get('owner', 'Unassigned')}</strong></span>
+                        <p style="font-size: 0.95rem; color: #334155; margin-bottom: 0.6rem;">{b.get('description', '')}</p>
+                        <div style="display: flex; gap: 20px; font-size: 0.85rem; color: #475569; margin-bottom: 0.4rem;">
+                            <span>Owner: <strong style="color: #111827;">{b.get('owner', 'Unassigned')}</strong></span>
                             <span>Status: <strong style="color: #fbbf24;">{b.get('status', 'Open')}</strong></span>
-                            <span>Due Date: <strong style="color: #CBD5E1;">{b.get('due_date', 'TBD')}</strong></span>
+                            <span>Due Date: <strong style="color: #334155;">{b.get('due_date', 'TBD')}</strong></span>
                         </div>
                         <div class="evidence-quote" style="margin-bottom: 0;">
-                            <strong>Evidence:</strong> "{b.get('evidence', 'No quote recorded.')}" (Source: <code style="color: #A5B4FC;">{b.get('source', 'N/A')}</code>)
+                            <strong>Evidence:</strong> "{b.get('evidence', 'No quote recorded.')}" (Source: <code style="color: #1D4ED8;">{b.get('source', 'N/A')}</code>)
                         </div>
                     </div>
                 """, unsafe_allow_html=True)
@@ -1453,8 +1465,8 @@ elif selected_page == "🩺 Project Health":
                 <div style="margin: 12px 0;">
                     <span class="{h_badge}" style="font-size: 1.1rem; padding: 6px 24px; text-transform: uppercase;">{h_class}</span>
                 </div>
-                <div style="font-size: 0.88rem; color: #94A3B8;">
-                    Confidence: <strong style="color: #F8FAFC;">{confidence}</strong> • <em>{sufficiency}</em>
+                <div style="font-size: 0.88rem; color: #475569;">
+                    Confidence: <strong style="color: #111827;">{confidence}</strong> • <em>{sufficiency}</em>
                 </div>
             </div>
         """, unsafe_allow_html=True)
@@ -1478,7 +1490,7 @@ elif selected_page == "🩺 Project Health":
                 st.markdown(f"""
                     <div class="glass-card" style="padding: 1.2rem 1.4rem; margin-bottom: 1rem;">
                         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.4rem;">
-                            <strong style="color: #F8FAFC; font-size: 1rem;">{dim_title} (25% Weight)</strong>
+                            <strong style="color: #111827; font-size: 1rem;">{dim_title} (25% Weight)</strong>
                             <span class="{'status-badge-ontrack' if d_st == 'Healthy' else ('status-badge-atrisk' if d_st == 'Moderate' else 'status-badge-delayed')}">{d_st}</span>
                         </div>
                         <div style="font-size: 1.4rem; font-weight: 800; color: #38BDF8; margin-bottom: 0.4rem;">{int(d_sc)}%</div>
@@ -1493,8 +1505,7 @@ elif selected_page == "🩺 Project Health":
         with f_col1:
             st.markdown("### 🔍 Why is the project currently at risk?")
             if key_factors:
-                for kf in key_factors:
-                    st.markdown(f"• <span style='color: #CBD5E1; font-size: 0.95rem;'>{kf}</span>", unsafe_allow_html=True)
+                st.markdown(" ".join(str(factor).strip() for factor in key_factors if str(factor).strip()))
             else:
                 st.caption("No adverse factors recorded.")
 
@@ -1502,7 +1513,7 @@ elif selected_page == "🩺 Project Health":
             st.markdown("### 💡 Strategic Next Steps")
             if recommendations:
                 for r in recommendations:
-                    st.markdown(f"💡 <span style='color: #CBD5E1; font-size: 0.95rem;'>{r}</span>", unsafe_allow_html=True)
+                    st.markdown(f"💡 <span style='color: #334155; font-size: 0.95rem;'>{r}</span>", unsafe_allow_html=True)
             else:
                 st.caption("No explicit recommendations recorded.")
 

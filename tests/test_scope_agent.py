@@ -238,3 +238,116 @@ def test_scope_extraction_respects_top_k_and_similarity(mock_provider, mock_retr
     mock_retriever.retrieve.assert_any_call(
         query=ScopeExtractionAgent.TARGET_QUERIES[0], project_name="Test_Project_A", top_k=1
     )
+
+
+def test_targeted_retrieval_preserves_responsibility_search(mock_provider):
+    class TargetedRetriever:
+        def retrieve(self, query, project_name, top_k):
+            if "responsibilities" in query:
+                text = "Record 1: Task_Name: Payment Gateway Integration | Assignee: John"
+                distance = 0.4
+            elif "milestones" in query:
+                text = "Milestone 1 deadline is 2026-10-01"
+                distance = 0.2
+            else:
+                text = "The project goals and deliverables include a notification system"
+                distance = 0.05
+            return [{"text": text, "metadata": {"source": "project.csv"}, "distance": distance}]
+
+    agent = ScopeExtractionAgent(provider=mock_provider, retriever=TargetedRetriever())
+    chunks = agent._retrieve_targeted_chunks(project_id="Test_Project_A", top_k=3)
+
+    assert len(chunks) == 3
+    assert any("Assignee: John" in chunk["text"] for chunk in chunks)
+
+
+def test_targeted_retrieval_deepens_only_when_milestone_rows_are_missing():
+    backlog = {
+        "text": "Row 1: Planned Sprint: Sprint 2 | User Story: Payment integration",
+        "metadata": {"source": "Agile_Template.xlsx"},
+        "distance": 0.5,
+    }
+
+    class TargetedRetriever:
+        def __init__(self):
+            self.detail_query_called = False
+
+        def retrieve(self, query, project_name, top_k):
+            if query == ScopeExtractionAgent.MILESTONE_DETAIL_QUERY:
+                self.detail_query_called = True
+                assert top_k >= 6
+                return [backlog]
+            return [{
+                "text": f"Relevant {query} information",
+                "metadata": {"source": "Project_Spec.pdf"},
+                "distance": 0.1,
+            }]
+
+    retriever = TargetedRetriever()
+    chunks = ScopeExtractionAgent(retriever=retriever)._retrieve_targeted_chunks("Project_A", top_k=3)
+
+    assert retriever.detail_query_called
+    assert any(chunk["metadata"]["source"] == "Agile_Template.xlsx" for chunk in chunks)
+
+
+def test_scope_recovers_explicit_task_assignments_from_context(mock_retriever):
+    provider = MagicMock(spec=BaseLLMProvider)
+    provider.generate_structured.return_value = {
+        "project_goals": [],
+        "deliverables": [],
+        "milestones": [],
+        "timeline": [],
+        "responsibilities": [],
+        "sources": [],
+    }
+    mock_retriever.retrieve.return_value = [{
+        "text": "Record 2: Task_Name: Payment Gateway Integration | Assignee: John | Status: Blocked",
+        "metadata": {"source": "sample_tasks.csv", "document_id": "doc_1", "chunk_id": "chunk_1"},
+    }]
+
+    result = ScopeExtractionAgent(provider=provider, retriever=mock_retriever).run("Test_Project_A")
+
+    assert result["metadata"]["status"] == "Success"
+    assert result["data"]["responsibilities"] == [{
+        "person": "John",
+        "responsibility": "Payment Gateway Integration",
+        "related_deliverable": None,
+        "source": "sample_tasks.csv",
+        "document_name": "sample_tasks.csv",
+        "document_id": "doc_1",
+        "page": None,
+        "chunk_id": "chunk_1",
+        "evidence": "Record 2: Task_Name: Payment Gateway Integration | Assignee: John | Status: Blocked",
+    }]
+
+
+def test_scope_recovers_and_deduplicates_planned_sprint_from_backlog(mock_retriever):
+    provider = MagicMock(spec=BaseLLMProvider)
+    provider.generate_structured.return_value = {
+        "project_goals": [],
+        "deliverables": [],
+        "milestones": [],
+        "timeline": [],
+        "responsibilities": [],
+        "sources": [],
+    }
+    backlog = (
+        "=== Sheet: Product Backlog === "
+        "Row 1: Planned Sprint: Sprint 2 | Actual Sprint: Sprint 2 | US ID: US-07 "
+        "| User Story Description: Complete payment "
+        "Row 2: Planned Sprint: Sprint 2 | Actual Sprint: Sprint 2 | US ID: US-08"
+    )
+    mock_retriever.retrieve.return_value = [{
+        "text": backlog,
+        "metadata": {"source": "Agile_Template.xlsx", "document_id": "doc_2", "chunk_id": "chunk_2"},
+    }]
+
+    result = ScopeExtractionAgent(provider=provider, retriever=mock_retriever).run("Test_Project_A")
+
+    assert result["metadata"]["status"] == "Success"
+    assert len(result["data"]["milestones"]) == 1
+    milestone = result["data"]["milestones"][0]
+    assert milestone["name"] == "Sprint 2"
+    assert milestone["source"] == "Agile_Template.xlsx"
+    assert "Planned Sprint: Sprint 2" in milestone["evidence"]
+    assert "planned sprint actual sprint" in ScopeExtractionAgent.TARGET_QUERIES[1]
