@@ -19,6 +19,14 @@ TEST_PROJECT_NAME = "Test Retrieval Project"
 TEST_CHROMA_DIR = "./data/test_chroma"
 
 
+@pytest.mark.parametrize(
+    ("chunk_count", "expected_depth"),
+    [(0, 3), (1, 3), (25, 5), (100, 10), (500, 10)],
+)
+def test_automatic_retrieval_depth_scales_with_workspace_size(chunk_count, expected_depth):
+    assert Retriever.automatic_top_k(chunk_count) == expected_depth
+
+
 @pytest.fixture(scope="module", autouse=True)
 def setup_vector_store():
     # 1. Generate sample data
@@ -95,3 +103,44 @@ def test_grounded_qa_out_of_context(setup_vector_store):
     # Verify sources and retrieved chunks are passed cleanly
     assert len(retrieved_chunks) > 0
     assert len(sources) > 0
+
+
+def test_retrieval_project_workspace_isolation(setup_vector_store):
+    """Verify Chroma collections scoped by workspace never return another project's chunks."""
+    embedder = setup_vector_store["embedder"]
+    vector_store = setup_vector_store["vector_store"]
+    retriever = setup_vector_store["retriever"]
+    chunker = TextChunker(chunk_size=300, overlap=30)
+
+    def index_workspace(name: str, text: str, source: str):
+        doc_info = {
+            "text": text,
+            "source": source,
+            "file_type": "txt",
+            "project_name": name,
+            "word_count": len(text.split()),
+        }
+        chunks = chunker.chunk_text(text, doc_info)
+        embeddings = embedder.embed_texts([c["text"] for c in chunks])
+        vector_store.add_chunks(name, chunks, embeddings)
+
+    index_workspace(
+        "Isolation_Project_A",
+        "UNIQUE_MARKER_ALPHA_ONLY documented risk for workspace A payment integration.",
+        "alpha_notes.txt",
+    )
+    index_workspace(
+        "Isolation_Project_B",
+        "UNIQUE_MARKER_BETA_ONLY documented blocker for workspace B database migration.",
+        "beta_notes.txt",
+    )
+
+    results_a = retriever.retrieve("What are the risks?", "Isolation_Project_A", top_k=3)
+    results_b = retriever.retrieve("What are the risks?", "Isolation_Project_B", top_k=3)
+    text_a = " ".join(r["text"] for r in results_a)
+    text_b = " ".join(r["text"] for r in results_b)
+
+    assert "UNIQUE_MARKER_ALPHA_ONLY" in text_a
+    assert "UNIQUE_MARKER_BETA_ONLY" not in text_a
+    assert "UNIQUE_MARKER_BETA_ONLY" in text_b
+    assert "UNIQUE_MARKER_ALPHA_ONLY" not in text_b

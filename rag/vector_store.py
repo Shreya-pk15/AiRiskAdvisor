@@ -184,6 +184,20 @@ class VectorStoreManager:
 
         return formatted_results
 
+    def get_all_chunks(self, project_name: str) -> List[Dict[str, Any]]:
+        """Return every stored chunk in the project's isolated collection."""
+        collection = self.get_or_create_collection(project_name)
+        results = collection.get(include=["documents", "metadatas"])
+
+        documents = results.get("documents") or []
+        metadatas = results.get("metadatas") or [{}] * len(documents)
+        chunk_ids = results.get("ids") or [""] * len(documents)
+
+        return [
+            {"chunk_id": chunk_id, "text": document, "metadata": metadata or {}}
+            for chunk_id, document, metadata in zip(chunk_ids, documents, metadatas)
+        ]
+
     def delete_project_collection(self, project_name: str):
         """Delete an entire project collection from ChromaDB."""
         coll_name = self._sanitize_collection_name(project_name)

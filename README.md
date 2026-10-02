@@ -1,27 +1,17 @@
 # 🛡️ AI Project Intelligence & Risk Advisor
 
-A modular, document-grounded Retrieval-Augmented Generation (RAG) application built with **Python**, **Streamlit**, **Sentence Transformers**, **ChromaDB**, and **Google Gemini API**.
+A modular, document-grounded Retrieval-Augmented Generation (RAG) application built with **Python**, **Streamlit**, **Sentence Transformers**, **ChromaDB**, **Google Gemini API**, and **Groq API**.
 
-Designed specifically for undergraduate B.Tech computer science software project teams, this application ingests heterogeneous project artifacts (PDF proposals, DOCX specifications, TXT meeting notes, CSV task lists), indexes them into a project-isolated vector database, and provides grounded, non-hallucinating AI answers.
+Designed for software project teams, this application ingests heterogeneous project artifacts (PDF proposals, DOCX specifications, TXT meeting notes, CSV task lists, XLSX defect trackers), indexes them into a project-isolated vector database, and provides grounded AI answers and structured project intelligence agents.
 
 ---
 
-## 📌 Project Overview & Problem Statement
+## 📌 Project Overview
 
-### Problem Statement
-Software development teams and student project groups generate large volumes of fragmented documentation across sprint cycles:
-- Project proposals (.pdf)
-- Software Requirement Specifications (.docx)
-- Sprint review notes (.txt)
-- Task boards & issue trackers (.csv)
-
-When project mentors or team members ask questions like *"What tasks are currently blocking our release?"* or *"What technologies are required?"*, finding answers requires searching through multiple separate documents manually.
-
-### Milestone 1 Solution
-Milestone 1 implements the foundational **Document-Grounded RAG Pipeline**:
-1. Ingests PDF, DOCX, CSV, and TXT files.
-2. Normalizes text and transforms tabular CSV rows into semantic key-value strings.
-3. Splits documents into overlapping text chunks (~400 words, 50-word overlap).
+### Milestone 1 — Document-Grounded RAG Pipeline
+1. Ingests PDF, DOCX, CSV, TXT, and XLSX files.
+2. Normalizes text and transforms tabular CSV/XLSX rows into semantic key-value strings.
+3. Segments documents into overlapping text chunks (~400 words, 50-word overlap).
 4. Generates 384-dimensional dense vector embeddings using `all-MiniLM-L6-v2`.
 5. Indexes chunks into persistent, project-isolated ChromaDB collections.
 6. Retrieves top-K relevant context chunks based on vector similarity search.
@@ -29,73 +19,179 @@ Milestone 1 implements the foundational **Document-Grounded RAG Pipeline**:
 
 ---
 
-## 🏗️ System Architecture
+## 🤖 Milestone 2 — Project Intelligence Agents
 
-### Milestone 1 RAG Flow
+### 1. Scope & Deliverable Extraction Agent (Gemini)
+Automatically extracts structured project goals, deliverables, milestones, timeline references, and responsibilities using the Google Gemini API (`GEMINI_SCOPE_MODEL=gemini-3.6-flash`).
 
-```text
-User Uploads Documents (.pdf, .docx, .csv, .txt)
-                    │
-                    ▼
-          [Document Processor]
-  (Extracts text, cleans formatting, normalizes)
-                    │
-                    ▼
-            [Text Chunker]
-  (Sliding window: 400 words, 50 word overlap)
-                    │
-                    ▼
-          [Embedding Manager]
-    (SentenceTransformers: all-MiniLM-L6-v2)
-                    │
-                    ▼
-          [Vector Store Manager]
-   (Persistent ChromaDB Collection per Project)
-                    │
-                    ▼
-          User Asks Project Question
-                    │
-                    ▼
-              [Retriever]
- (Generates query embedding & fetches Top-K chunks)
-                    │
-                    ▼
-           [Grounded QA Generator]
- (System Prompt + Retrieved Context + Question -> LLM)
-                    │
-                    ▼
-         Streamlit UI Display
-   (Grounded Answer + Source List + Context Chunks)
+### 2. Risk Detection & Delivery Forecasting Agent (Groq)
+Analyzes project documents to detect evidence-based project risks (Schedule, Dependency, Resource, Technical, Quality, Planning, Delivery) and generate forward-looking delivery forecasts using the Groq API (`GROQ_RISK_MODEL=openai/gpt-oss-120b`).
+
+### 3. Blocker & Action Item Identification Agent (Gemini)
+Identifies technical/dependency/approval blockers, pending decisions, unresolved issues, and assigned action items using the Google Gemini API (`GEMINI_BLOCKER_MODEL=gemini-3.6-flash`).
+
+---
+
+## 📋 Milestone 3 — Documentation, Health & Conversational Intelligence
+
+### 1. Documentation Generation Agent (Gemini)
+Reuses Scope, Risk, and Blocker agent outputs (when available in the session) to generate:
+* **User Stories** — MoSCoW priorities, acceptance criteria, source/evidence per story
+* **Risk Register** — structured register from identified risks (no invented owners/deadlines)
+* **Action Items** — formal list from blockers, decisions, and documented actions
+
+Model: `GEMINI_DOCGEN_MODEL` (defaults to `gemini-3.6-flash`).
+
+### 2. Project Health Scoring Module (deterministic, no LLM)
+Computes an overall **0–100** score from Milestone 2 outputs:
+* Scope Clarity (25%)
+* Timeline Risk (30%)
+* Blocker Status (25%)
+* Delivery Risk (20%)
+
+Includes classification (Healthy / Moderate / At Risk / Critical), confidence/data-sufficiency notes, dimension breakdown, and recommendations.
+
+### 3. Conversational Project Intelligence Assistant (Gemini)
+Multi-turn chat grounded in ChromaDB retrieval plus cached Scope/Risk/Blocker/Health outputs. Supports follow-up questions, source badges, and safe refusal when documents do not contain the answer.
+
+Model: `GEMINI_CHAT_MODEL` (defaults to `gemini-3.6-flash`).
+
+### Streamlit dashboard flow
+1. **Ingest Project Artifacts** → **Index & Process**
+2. **Grounded Project Q&A** (Milestone 1 RAG)
+3. **Project Intelligence** — Scope & Deliverables | Risks & Delivery | Blockers & Actions
+4. **Documentation** — User Stories | Risk Register | Action Items (+ CSV export)
+5. **Project Health** — Evaluate & dimension breakdown
+6. **Conversational Project Assistant** — chat with suggested prompts
+
+Workspace name in the sidebar acts as **project_id** for ChromaDB isolation.
+
+---
+
+### ⚙️ Environment Configuration
+
+Configure in `.env`:
+
+```env
+# Gemini API Configuration (Scope & Blocker Agents)
+GEMINI_API_KEY=your_actual_gemini_api_key_here
+GEMINI_SCOPE_MODEL=gemini-3.6-flash
+GEMINI_BLOCKER_MODEL=gemini-3.6-flash
+GEMINI_DOCGEN_MODEL=gemini-3.6-flash
+GEMINI_CHAT_MODEL=gemini-3.6-flash
+
+# Groq API Configuration (Risk Agent)
+GROQ_API_KEY=your_actual_groq_api_key_here
+GROQ_RISK_MODEL=openai/gpt-oss-120b
+
+# Common Timeout & Vector Settings
+AGENT_TIMEOUT_SECONDS=30
+EMBEDDING_MODEL_NAME=all-MiniLM-L6-v2
+CHROMA_PERSIST_DIR=./data/chroma
 ```
 
 ---
 
-## 🤖 Future Multi-Agent Architecture (Target Architecture)
-
-In future milestones, specialized AI agents will consume this RAG Knowledge Base to automate project management tasks:
+### 🔄 Blocker Agent RAG Retrieval & Gemini Architecture
 
 ```text
-                             RAG Knowledge Base
-                                     │
-                                     ▼
-                            Agent Orchestrator
-                                     │
-       ┌─────────────────────────────┼─────────────────────────────┐
-       ▼                             ▼                             ▼
-  Scope Agent                   Risk Agent                   Blocker Agent
- (Extracts deliverables        (Detects timeline             (Identifies pending
-  & requirements)               & resource risks)             API keys & blockers)
-       │                             │                             │
-       └─────────────────────────────┼─────────────────────────────┘
-                                     ▼
-                        Documentation Generator Agent
-                                     │
-                                     ▼
-                             Forecasting Agent
-                                     │
-                                     ▼
-                          Project Health Scoring
+Selected Workspace (project_id)
+             │
+             ▼
+Targeted Semantic RAG Queries:
+  • "meeting blockers unresolved issues"
+  • "pending decisions technology approval clarification"
+  • "action items assigned tasks owner deadline"
+  • "sprint progress issues defect tracker updates"
+  • "tasks waiting for people teams approval dependency"
+             │
+             ▼
+      [Retriever Engine]
+ (Filtered by project_id in ChromaDB)
+             │
+             ▼
+   [Deduplicated Context]
+             │
+             ▼
+    [GeminiProvider]
+ (1 Structured API Generation Call)
+             │
+             ▼
+  [BlockerActionOutput]
+   (Validated Pydantic Schema)
 ```
+
+---
+
+### 🛡️ Grounding Rules & Grounded Output Spec
+
+* **No Hallucination**: The agent extracts **ONLY** items directly supported by retrieved chunks.
+* **Missing Field Fallback**: If an assignee, deadline, or attribute is omitted in documents, it sets:
+  ```text
+  Not specified in the available project documents.
+  ```
+* **Empty Category Fallback**: If no items are found for a category, it displays an informative notice (e.g. `"No blockers identified from the available project documents."`).
+* **Structured Output Schema (`BlockerActionOutput` / `BlockerActionResult`)**:
+  ```json
+  {
+    "blockers": [
+      {
+        "description": "Payment gateway deployment blocked waiting for security approval",
+        "impact": "Delays production release",
+        "status": "Active",
+        "owner": "Security Team",
+        "source": "Sprint_Notes.txt",
+        "evidence": "Payment gateway deployment is blocked waiting for security team approval."
+      }
+    ],
+    "pending_decisions": [
+      {
+        "decision": "Selection of database migration tool",
+        "owner": "Architecture Team",
+        "status": "Pending",
+        "source": "Sprint_Notes.txt"
+      }
+    ],
+    "unresolved_issues": [
+      {
+        "issue": "Unresolved DB migration pipeline compatibility",
+        "status": "Open",
+        "source": "Sprint_Notes.txt"
+      }
+    ],
+    "action_items": [
+      {
+        "action": "Update unit test suite",
+        "assignee": "Rahul",
+        "deadline": "Friday",
+        "status": "Open",
+        "priority": "High",
+        "source": "Sprint_Notes.txt",
+        "evidence": "Rahul to update unit test suite by Friday."
+      }
+    ],
+    "sources": ["Sprint_Notes.txt"]
+  }
+  ```
+
+---
+
+### 🖥️ Streamlit UI Integration
+
+In Section **3. Project Intelligence**, click **`[🛑 Blockers & Action Items]`**.
+
+The interface renders:
+* **Blockers Table**: Blocker description, status, evidence, source.
+* **Pending Decisions Table**: Decision, owner, status, source.
+* **Unresolved Issues Table**: Issue description, status, evidence, source.
+* **Action Items Table**: Action, assignee, deadline, status, priority, evidence, source.
+* **Agent Metadata Card**:
+  ```text
+  Agent: Blocker & Action Agent
+  Provider: Gemini
+  Execution Time: X seconds
+  Status: Success/Failed
+  ```
 
 ---
 
@@ -103,152 +199,54 @@ In future milestones, specialized AI agents will consume this RAG Knowledge Base
 
 | Technology | Purpose | Selection Rationale |
 | :--- | :--- | :--- |
-| **Python 3.11** | Core Language | Simple, clean syntax, standard for AI & data engineering. |
-| **Streamlit** | UI Framework | Rapid, interactive web dashboard in pure Python. |
-| **PyMuPDF (`pymupdf`)** | PDF Extraction | Fast, high-accuracy page-by-page text extraction. |
-| **python-docx** | DOCX Extraction | Native extraction of paragraphs and table data from Word files. |
-| **pandas** | CSV Processing | Converts tabular rows into semantic key-value strings for RAG. |
-| **Sentence Transformers** | Embeddings | Local, lightweight `all-MiniLM-L6-v2` embedding model (384-d). |
-| **ChromaDB** | Vector Database | Persistent, serverless vector store supporting project isolation. |
-| **Google Gemini API** | Grounded QA | Powerful LLM API for context-based answer generation. |
-| **python-dotenv** | Config | Securely manages API keys via `.env` files. |
-
----
-
-## 🧠 Educational RAG Explanation (For Mentor Q&A)
-
-### 1. Why do we chunk text?
-- **Embedding Model Limits**: Models like `all-MiniLM-L6-v2` have maximum token input limits (256/512 tokens).
-- **Retrieval Precision**: Searching across 400-word paragraphs allows the vector store to pinpoint exact answers (e.g., a specific meeting blocker) rather than returning a 30-page document.
-
-### 2. Why is overlap needed?
-- **Sentence Boundary Protection**: A hard split at word 400 might cut a critical requirement sentence in half.
-- **Context Continuity**: Overlapping chunks by 50 words ensures boundary sentences appear intact in consecutive chunks.
-
-### 3. Why not embed an entire 20-page PDF as a single vector?
-- **Information Dilution**: A single 384-dimensional vector cannot encode 20 pages of diverse technical details. Specific facts get lost in the average vector representation.
+| **Python 3.11** | Core Language | Standard for AI & data engineering. |
+| **Streamlit** | UI Framework | Interactive web dashboard in pure Python. |
+| **PyMuPDF / python-docx / pandas** | Ingestion | Extraction from PDF, DOCX, CSV, TXT, and XLSX. |
+| **Sentence Transformers** | Embeddings | Local `all-MiniLM-L6-v2` embedding model (384-d). |
+| **ChromaDB** | Vector Database | Persistent vector store with project workspace isolation. |
+| **google-genai** | Scope & Blocker LLM | Google SDK for Gemini models. |
+| **groq** | Risk Agent LLM | High-speed Groq SDK for Llama 3 models. |
+| **python-dotenv** | Config | Environment variable management. |
 
 ---
 
 ## 🚀 Installation & Running
 
-### 1. Clone & Set Up Virtual Environment
-
-#### Windows (PowerShell):
-```powershell
+### 1. Set Up Virtual Environment & Install Dependencies
+```bash
 python -m venv venv
-.\venv\Scripts\Activate.ps1
-```
-
-#### Linux / macOS:
-```bash
-python3 -m venv venv
-source venv/bin/activate
-```
-
-### 2. Install Dependencies
-```bash
+source venv/bin/activate  # On Windows: .\venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 ```
 
-### 3. Configure Environment Variables
-Copy `.env.example` to `.env` and add your Google Gemini API key:
+### 2. Configure Environment
+Create `.env` file:
 ```bash
 cp .env.example .env
 ```
+Ensure `GEMINI_API_KEY`, `GEMINI_SCOPE_MODEL`, `GEMINI_BLOCKER_MODEL`, `GROQ_API_KEY`, `GROQ_RISK_MODEL`, and `AGENT_TIMEOUT_SECONDS` are set.
 
-Inside `.env`:
-```text
-GEMINI_API_KEY=your_actual_gemini_api_key_here
-EMBEDDING_MODEL_NAME=all-MiniLM-L6-v2
-CHROMA_PERSIST_DIR=./data/chroma
-```
-
-### 4. Generate Sample Dataset
-Run the sample data generator to create test documents (`sample_proposal.pdf`, `sample_srs.docx`, `sample_meeting_notes.txt`, `sample_tasks.csv`):
+### 3. Generate Sample Data & Run UI
 ```bash
 python generate_sample_data.py
-```
-
-### 5. Launch Streamlit Dashboard
-```bash
 streamlit run app.py
 ```
 
 ---
 
-## 🧪 Testing & Verification
+## 🧪 Testing
 
-Run automated unit and integration tests using `pytest`:
+Run full automated test suite:
 ```bash
-pytest tests/
+pytest
 ```
 
-Expected output:
-```text
-tests/test_chunking.py .                                                 [ 12%]
-tests/test_ingestion.py ....                                             [ 62%]
-tests/test_retrieval.py ...                                              [100%]
-======================= 8 passed in 18.19s =======================
+Milestone 3 focused suites:
+```bash
+pytest tests/test_documentation_agent.py tests/test_health_scorer.py tests/test_conversational_agent.py
 ```
 
----
-
-## 📁 Project Structure
-
-```text
-ai-project-intelligence/
-├── app.py                      # Streamlit UI Dashboard
-├── generate_sample_data.py     # Test dataset generator
-├── requirements.txt            # Python dependencies
-├── .env.example                # Sample configuration template
-├── .gitignore                  # Git ignore rules
-├── README.md                   # System documentation
-├── conftest.py                 # Pytest path resolution
-│
-├── ingestion/                  # Document loading & text cleaning
-│   ├── __init__.py
-│   ├── pdf_loader.py           # PyMuPDF text loader
-│   ├── docx_loader.py          # python-docx loader
-│   ├── csv_loader.py           # pandas semantic loader
-│   ├── txt_loader.py           # TXT file loader with encoding fallbacks
-│   └── document_processor.py   # Text normalizer & unified entry point
-│
-├── rag/                        # Core RAG engine
-│   ├── __init__.py
-│   ├── chunker.py              # Text chunker with educational comments
-│   ├── embeddings.py           # SentenceTransformers wrapper
-│   ├── vector_store.py         # Persistent ChromaDB collection manager
-│   ├── retriever.py            # Similarity search & Top-K retriever
-│   └── qa.py                   # Grounded LLM prompt builder & QA
-│
-├── models/                     # Data schemas
-│   ├── __init__.py
-│   └── schemas.py              # Project, Document, Chunk dataclasses
-│
-├── utils/                      # Helper utilities
-│   ├── __init__.py
-│   └── helpers.py              # Sanitization & source formatting helpers
-│
-├── sample_data/                # Generated sample test documents
-│   ├── sample_proposal.pdf
-│   ├── sample_srs.docx
-│   ├── sample_meeting_notes.txt
-│   └── sample_tasks.csv
-│
-└── tests/                      # Automated test suite
-    ├── test_ingestion.py
-    ├── test_chunking.py
-    └── test_retrieval.py
+To run only the Blocker Agent test suite:
+```bash
+pytest tests/test_blocker_agent.py
 ```
-
----
-
-## ❓ Troubleshooting
-
-| Issue | Cause | Solution |
-| :--- | :--- | :--- |
-| `ModuleNotFoundError: No module named 'rag'` | Python path not set | Run `conftest.py` or use `python -m pytest tests/` |
-| `UnicodeEncodeError` in Windows console | Windows CP1252 character mapping | Use ASCII symbols in print statements |
-| `LLM API Key Not Configured` | Missing `.env` key | Set `GEMINI_API_KEY` in `.env` |
-| `PDF file contains no readable text` | Scanned image PDF | Use digital text PDFs or add OCR in future milestones |

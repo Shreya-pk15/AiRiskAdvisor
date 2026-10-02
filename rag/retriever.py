@@ -5,6 +5,7 @@ Converts query into vector embedding, searches project collection in ChromaDB,
 and returns top-k relevant text chunks with metadata.
 """
 
+import math
 from typing import List, Dict, Any, Optional
 from rag.embeddings import EmbeddingManager
 from rag.vector_store import VectorStoreManager
@@ -12,6 +13,11 @@ from rag.vector_store import VectorStoreManager
 
 class Retriever:
     """Handles semantic similarity search over project collections."""
+
+    @staticmethod
+    def automatic_top_k(chunk_count: int) -> int:
+        """Scale retrieval depth with workspace size while bounding model context."""
+        return min(10, max(3, math.ceil(math.sqrt(max(1, chunk_count)))))
 
     def __init__(
         self,
@@ -52,3 +58,7 @@ class Retriever:
         )
 
         return retrieved_chunks
+
+    def retrieve_all(self, project_name: str) -> List[Dict[str, Any]]:
+        """Return all chunks from one project collection for comprehensive analysis."""
+        return self.vector_store_manager.get_all_chunks(project_name=project_name)

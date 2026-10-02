@@ -6,7 +6,8 @@ import re
 import os
 from typing import List, Dict, Any
 
-ALLOWED_EXTENSIONS = {".pdf", ".docx", ".csv", ".txt"}
+ALLOWED_EXTENSIONS = {".pdf", ".docx", ".csv", ".txt", ".xlsx"}
+
 
 
 def is_allowed_file(filename: str) -> bool:

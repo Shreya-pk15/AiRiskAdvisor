@@ -10,6 +10,7 @@ from ingestion.pdf_loader import load_pdf
 from ingestion.docx_loader import load_docx
 from ingestion.csv_loader import load_csv
 from ingestion.txt_loader import load_txt
+from ingestion.xlsx_loader import load_xlsx
 from utils.helpers import clean_text, sanitize_filename
 
 
@@ -20,7 +21,8 @@ class DocumentProcessor:
         ".pdf": load_pdf,
         ".docx": load_docx,
         ".csv": load_csv,
-        ".txt": load_txt
+        ".txt": load_txt,
+        ".xlsx": load_xlsx,
     }
 
     def process_file(

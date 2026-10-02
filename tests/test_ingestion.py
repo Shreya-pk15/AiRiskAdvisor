@@ -1,6 +1,6 @@
 """
 Unit tests for document ingestion and text normalization modules.
-Tests PDF, DOCX, CSV, and TXT loaders using sample data files.
+Tests PDF, DOCX, CSV, TXT, and XLSX loaders using sample data files.
 """
 
 import os
@@ -58,3 +58,16 @@ def test_txt_ingestion():
     assert doc_info["source"] == "sample_meeting_notes.txt"
     assert "SPRINT REVIEW MEETING NOTES" in doc_info["text"]
     assert "Payment Integration Task is currently BLOCKED" in doc_info["text"]
+
+
+def test_xlsx_ingestion():
+    xlsx_path = "./sample_data/sample_defects.xlsx"
+    doc_info = process_uploaded_file(xlsx_path, "sample_defects.xlsx", "SPMS Project")
+
+    assert doc_info["file_type"] == "xlsx"
+    assert doc_info["source"] == "sample_defects.xlsx"
+    assert "Row 1:" in doc_info["text"]
+    assert "Defect_ID: DEF-201" in doc_info["text"]
+    assert "=== Sheet: Sheet1 ===" in doc_info["text"]
+    assert "XLSX parser memory spike" in doc_info["text"]
+    assert doc_info["word_count"] > 5

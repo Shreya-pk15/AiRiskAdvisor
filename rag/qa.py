@@ -139,7 +139,6 @@ class AnswerGenerator:
         models_to_try = [
             self.model_name,
             "gemini-3.6-flash",
-            "gemini-2.5-flash",
             "gemini-flash-latest",
             "gemini-1.5-flash-latest"
         ]
@@ -159,6 +158,23 @@ class AnswerGenerator:
                 if "PERMISSION_DENIED" in str(e) or "403" in str(e):
                     break
                 continue
+
+        # Fallback to Groq if available
+        groq_api_key = os.getenv("GROQ_API_KEY")
+        if groq_api_key and groq_api_key.strip():
+            try:
+                from groq import Groq
+                groq_client = Groq(api_key=groq_api_key)
+                groq_model = os.getenv("GROQ_RISK_MODEL", "openai/gpt-oss-120b")
+                groq_resp = groq_client.chat.completions.create(
+                    model=groq_model,
+                    messages=[{"role": "user", "content": prompt}]
+                )
+                if groq_resp and groq_resp.choices:
+                    answer_text = groq_resp.choices[0].message.content.strip()
+                    return answer_text, sources, retrieved_chunks
+            except Exception:
+                pass
 
         # Fallback to Local Extractor mode if API fails or returns 403
         extracted_points = []

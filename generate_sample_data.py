@@ -9,6 +9,7 @@ Generated files in sample_data/:
 - sample_srs.docx: Detailed software functional requirements and deliverables.
 - sample_meeting_notes.txt: Sprint review meeting notes documenting blockers and decisions.
 - sample_tasks.csv: Sprint task breakdown with assignees, deadlines, and statuses.
+- sample_defects.xlsx: Defect tracker spreadsheet (XLSX ingestion validation).
 """
 
 import os
@@ -156,6 +157,23 @@ def generate_all_sample_files(output_dir: str = "./sample_data"):
     df_tasks = pd.DataFrame(tasks_data)
     df_tasks.to_csv(csv_path, index=False)
     print(f"[OK] Created {csv_path}")
+
+    # -------------------------------------------------------------------------
+    # 5. Generate sample_defects.xlsx
+    # -------------------------------------------------------------------------
+    xlsx_path = os.path.join(output_dir, "sample_defects.xlsx")
+    defects_data = {
+        "Defect_ID": ["DEF-201", "DEF-202"],
+        "Summary": [
+            "XLSX parser memory spike on large sheets",
+            "CSV row semantic conversion missing optional columns",
+        ],
+        "Severity": ["High", "Medium"],
+        "Status": ["Open", "In Progress"],
+        "Owner": ["John", "Shreya"],
+    }
+    pd.DataFrame(defects_data).to_excel(xlsx_path, index=False, engine="openpyxl")
+    print(f"[OK] Created {xlsx_path}")
 
 
 if __name__ == "__main__":
