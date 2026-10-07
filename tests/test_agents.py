@@ -58,3 +58,49 @@ def test_orchestrator_returns_structured_intelligence():
     assert result["scope"] is not None
     assert result["risks"] is not None
     assert result["blockers"] is not None
+
+
+def test_groq_and_gemini_provider_json_extraction_edge_cases():
+    from llm.groq_provider import GroqProvider
+    from llm.gemini_provider import GeminiProvider
+    from agents.schemas import BlockerActionOutput
+
+    groq_provider = GroqProvider(api_key="mock_key")
+    gemini_provider = GeminiProvider(api_key="mock_key")
+
+    # Case 1: Reasoning <think> tags + markdown code fence
+    case1 = """<think>
+    Thinking about the blockers in the text...
+    Found 1 blocker.
+    </think>
+    ```json
+    {
+      "blockers": [{"description": "DevOps delay", "source": "Notes.txt"}],
+      "pending_decisions": [],
+      "unresolved_issues": [],
+      "action_items": [],
+      "sources": ["Notes.txt"]
+    }
+    ```"""
+
+    res1_groq = groq_provider._parse_and_validate_json(case1, BlockerActionOutput)
+    res1_gemini = gemini_provider._parse_and_validate_json(case1, BlockerActionOutput)
+    assert len(res1_groq["blockers"]) == 1
+    assert len(res1_gemini["blockers"]) == 1
+
+    # Case 2: Preamble + trailing commas
+    case2 = """Here is the extracted blocker JSON data:
+    {
+      "blockers": [],
+      "pending_decisions": [],
+      "unresolved_issues": [],
+      "action_items": [],
+      "sources": ["doc1.pdf",],
+    }
+    Hope this helps!"""
+
+    res2_groq = groq_provider._parse_and_validate_json(case2, BlockerActionOutput)
+    res2_gemini = gemini_provider._parse_and_validate_json(case2, BlockerActionOutput)
+    assert res2_groq["sources"] == ["doc1.pdf"]
+    assert res2_gemini["sources"] == ["doc1.pdf"]
+

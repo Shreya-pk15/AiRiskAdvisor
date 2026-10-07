@@ -1223,9 +1223,9 @@ elif selected_page == "⚠️ Risks":
                 provider = resolve_agent_provider(groq_risk_model)
                 agent = RiskDetectionAgent(provider=provider, retriever=retriever, model_name=groq_risk_model)
                 res = agent.run(project_id=project_name, top_k=top_k)
-                st.session_state[f"risk_data_{project_name}"] = res.get("data", {})
-                st.success("Risk analysis complete.")
-                st.rerun()
+                if store_agent_result(res, f"risk_data_{project_name}", "Risk analysis"):
+                    st.success("Risk analysis complete.")
+                    st.rerun()
 
     risk_data = st.session_state.get(f"risk_data_{project_name}")
     if not risk_data:

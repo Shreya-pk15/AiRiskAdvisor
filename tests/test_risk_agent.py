@@ -18,6 +18,7 @@ from unittest.mock import MagicMock, patch
 from agents.risk_agent import RiskDetectionAgent, FALLBACK_NOT_SPECIFIED
 from agents.schemas import DeliveryForecast, RiskDetectionOutput, RiskItem
 from llm.base_provider import BaseLLMProvider
+from llm.groq_provider import GroqProvider
 
 
 @pytest.fixture
@@ -178,6 +179,25 @@ def test_groq_api_failure_handling(mock_retriever):
     assert "Groq API rate limit" in res["metadata"]["error"]
     assert isinstance(res["data"], dict)
     assert res["data"]["risks"] == []
+
+
+def test_groq_provider_uses_fallback_for_unavailable_model(monkeypatch):
+    monkeypatch.setenv("GROQ_FALLBACK_MODELS", "fallback/model")
+    provider = GroqProvider(api_key="test-key", model_name="missing/model")
+
+    with patch.object(
+        provider,
+        "_generate_structured_with_model",
+        side_effect=[RuntimeError("model_not_found"), {"risks": []}],
+    ) as generate:
+        result = provider.generate_structured("prompt", RiskDetectionOutput)
+
+    assert result == {"risks": []}
+    assert [call.kwargs["model_id"] for call in generate.call_args_list] == [
+        "missing/model",
+        "fallback/model",
+    ]
+    assert provider.model_name == "fallback/model"
 
 
 def test_project_isolation_verification(mock_groq_provider):

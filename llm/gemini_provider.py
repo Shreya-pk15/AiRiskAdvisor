@@ -142,32 +142,94 @@ class GeminiProvider(BaseLLMProvider):
         return self.generate_text(prompt=json_prompt, system_instruction=system_instruction, timeout=timeout)
 
     def _parse_and_validate_json(self, raw_text: str, response_schema: Type[BaseModel]) -> Dict[str, Any]:
-        """Clean markdown JSON wrappers and parse/validate against Pydantic schema."""
+        """Clean markdown formatting, thought tags, and validate against Pydantic schema."""
+        if not raw_text or not raw_text.strip():
+            try:
+                return response_schema().model_dump()
+            except Exception:
+                raise ValueError("Gemini returned empty response and schema has no defaults.")
+
         cleaned = raw_text.strip()
 
-        # Strip markdown ```json ... ``` tags
-        if cleaned.startswith("```"):
-            cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
-            cleaned = re.sub(r"\s*```$", "", cleaned)
-        cleaned = cleaned.strip()
+        # 1. Strip thinking / reasoning tags (e.g. <think>...</think>)
+        cleaned = re.sub(r"<think>[\s\S]*?</think>", "", cleaned, flags=re.IGNORECASE).strip()
 
-        try:
-            data = json.loads(cleaned)
-        except json.JSONDecodeError:
-            # Search for JSON object within text
-            match = re.search(r"\{.*\}", cleaned, re.DOTALL)
+        # 2. Extract from markdown code fences if present
+        code_block_match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", cleaned, re.IGNORECASE)
+        candidate = code_block_match.group(1).strip() if code_block_match else cleaned
+
+        # 3. Helper to find balanced outer JSON structure
+        def _extract_balanced_json(text: str) -> Optional[str]:
+            for start_char, end_char in [("{", "}"), ("[", "]")]:
+                start_idx = text.find(start_char)
+                if start_idx != -1:
+                    depth = 0
+                    in_str = False
+                    escape = False
+                    for i in range(start_idx, len(text)):
+                        c = text[i]
+                        if escape:
+                            escape = False
+                            continue
+                        if c == "\\":
+                            escape = True
+                            continue
+                        if c == '"':
+                            in_str = not in_str
+                            continue
+                        if not in_str:
+                            if c == start_char:
+                                depth += 1
+                            elif c == end_char:
+                                depth -= 1
+                                if depth == 0:
+                                    return text[start_idx : i + 1]
+            return None
+
+        # 4. Attempt parsing across extracted candidates
+        data = None
+        candidates_to_try = []
+        balanced = _extract_balanced_json(candidate) or _extract_balanced_json(cleaned)
+        if balanced:
+            candidates_to_try.append(balanced)
+        candidates_to_try.extend([candidate, cleaned])
+
+        for cand in candidates_to_try:
+            if not cand:
+                continue
+            # Attempt direct parse
+            try:
+                data = json.loads(cand, strict=False)
+                break
+            except Exception:
+                pass
+            # Attempt trailing commas cleanup
+            try:
+                sanitized = re.sub(r",\s*([\]}])", r"\1", cand)
+                data = json.loads(sanitized, strict=False)
+                break
+            except Exception:
+                pass
+
+        if data is None:
+            # Fallback regex search for anything with curly braces
+            match = re.search(r"\{[\s\S]*\}", cleaned)
             if match:
                 try:
-                    data = json.loads(match.group(0))
-                except json.JSONDecodeError as exc:
-                    raise ValueError(f"Could not parse valid JSON from LLM response: {cleaned[:100]}...") from exc
+                    sanitized = re.sub(r",\s*([\]}])", r"\1", match.group(0))
+                    data = json.loads(sanitized, strict=False)
+                except Exception as exc:
+                    raise ValueError(f"Could not parse valid JSON from Gemini output: {cleaned[:120]}...") from exc
             else:
-                raise ValueError(f"No JSON object found in LLM response: {cleaned[:100]}...")
+                raise ValueError(f"No JSON object found in Gemini output: {cleaned[:120]}...")
 
         # Unwrap list-wrapped responses: some models return [{...}] instead of {...}
         if isinstance(data, list) and len(data) > 0 and isinstance(data[0], dict):
             data = data[0]
 
         # Validate with Pydantic
-        validated_model = response_schema.model_validate(data)
-        return validated_model.model_dump()
+        try:
+            validated_model = response_schema.model_validate(data)
+            return validated_model.model_dump()
+        except ValidationError as exc:
+            raise ValueError(f"Gemini output validation error for {response_schema.__name__}: {exc}") from exc
