@@ -96,6 +96,11 @@ Rules:
    - Review every supplied chunk, including task tables and meeting notes; do not omit a supported item because optional attributes are absent.
    - Preserve each explicit task as an action item, even when its assignee, deadline, or priority is not stated.
 
+6. STRUCTURED RECORDS & TASK TABLES:
+   - When context contains structured records (e.g. 'Record 1: task: Write project proposal | owner: Asha | due_date: 2026-09-05 | status: Done | priority: High') or CSV/tabular rows, extract EVERY task record as a separate ActionItem.
+   - Map: task/action -> action, owner/assignee -> assignee, due_date/deadline -> deadline, status -> status, priority -> priority.
+   - If a task record has status 'Blocked' or notes an impediment/dependency, ALSO extract it as a BlockerItem!
+
 Project context:
 {context}
 

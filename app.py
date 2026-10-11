@@ -251,7 +251,6 @@ with top_col1:
         <div class="brand-container">
             <div class="brand-logo-text">
                 ⚡ AI Risk &amp; Project Advisor
-                <span class="brand-badge">Intelligence Platform</span>
             </div>
         </div>
     """, unsafe_allow_html=True)

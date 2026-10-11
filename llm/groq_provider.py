@@ -81,7 +81,8 @@ class GroqProvider(BaseLLMProvider):
             response = client.chat.completions.create(
                 model=self.model_name,
                 messages=msgs,
-                temperature=0.1
+                temperature=0.1,
+                max_tokens=900
             )
             return response.choices[0].message.content if response and response.choices else ""
 
@@ -201,7 +202,8 @@ class GroqProvider(BaseLLMProvider):
                     model=model_id,
                     messages=curr_messages,
                     response_format={"type": "json_object"},
-                    temperature=0.1
+                    temperature=0.1,
+                    max_tokens=900
                 )
                 raw_content = response.choices[0].message.content if response and response.choices else ""
                 if raw_content and raw_content.strip():
@@ -235,7 +237,8 @@ class GroqProvider(BaseLLMProvider):
             response = client.chat.completions.create(
                 model=model_id,
                 messages=fallback_messages,
-                temperature=0.1
+                temperature=0.1,
+                max_tokens=900
             )
             raw_content = response.choices[0].message.content if response and response.choices else "{}"
             return raw_content

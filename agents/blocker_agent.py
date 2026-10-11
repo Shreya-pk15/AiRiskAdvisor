@@ -7,6 +7,7 @@ project documents using grounded RAG retrieval and Google Gemini API.
 
 import logging
 import os
+import re
 import time
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -42,6 +43,8 @@ class BlockerActionAgent(BaseAgent):
         "action items assigned tasks owner deadline",
         "sprint progress issues defect tracker updates",
         "tasks waiting for people teams approval dependency",
+        "task records owner due date priority status",
+        "tasks backlog sprint deliverables assignments",
     ]
 
     def __init__(
@@ -138,6 +141,13 @@ class BlockerActionAgent(BaseAgent):
             if blocker_output is None:
                 provider_name = "Rule-Based"
                 blocker_output = self.analyze_context(retrieved_chunks)
+            else:
+                # If LLM succeeded but missed structured action items present in chunks, supplement them
+                rule_fallback = self.analyze_context(retrieved_chunks)
+                if not blocker_output.action_items and rule_fallback.action_items:
+                    blocker_output.action_items = rule_fallback.action_items
+                if not blocker_output.blockers and rule_fallback.blockers:
+                    blocker_output.blockers = rule_fallback.blockers
 
             exec_time = round(time.time() - start_time, 2)
             note = f"LLM unavailable, used rule-based extraction. LLM error: {llm_error}" if llm_error else None
@@ -273,23 +283,146 @@ class BlockerActionAgent(BaseAgent):
 
         # Rule-based fallback for context analysis
         chunks = self._normalize_chunks(retrieved_chunks)
-        blockers, decisions, issues, action_items = [], [], [], []
+        blockers: List[BlockerItem] = []
+        decisions: List[PendingDecision] = []
+        issues: List[UnresolvedIssue] = []
+        action_items: List[ActionItem] = []
         sources = set()
+        act_counter = 1
 
         for chunk in chunks:
             text = chunk.get("text", "")
             source = self._extract_source(chunk)
             sources.add(source)
 
-            lower = text.lower()
-            if "block" in lower or "waiting" in lower:
-                blockers.append(BlockerItem(description=text[:150], source=source, evidence=text[:150]))
-            if "decision" in lower or "pending" in lower:
-                decisions.append(PendingDecision(decision=text[:150], source=source, evidence=text[:150]))
-            if "issue" in lower or "defect" in lower or "bug" in lower:
-                issues.append(UnresolvedIssue(issue=text[:150], source=source, evidence=text[:150]))
-            if "action" in lower or "todo" in lower or "task" in lower:
-                action_items.append(ActionItem(action=text[:150], source=source, evidence=text[:150]))
+            # Normalize text: place inline 'Record \d+:' onto newlines
+            normalized_text = re.sub(r'(?i)\s+(Record\s*\d+:)', r'\n\1', text)
+            lines = [l.strip() for l in normalized_text.split('\n') if l.strip()]
+
+            for line in lines:
+                lower = line.lower()
+
+                # Case 1: Pipe-delimited structured record (e.g. 'Record 1: task: ... | owner: ... | due_date: ...')
+                if "|" in line and any(k in lower for k in ["task", "owner", "due", "status", "priority", "assignee"]):
+                    cleaned_line = re.sub(r'(?i)^Record\s*\d+:\s*', '', line).strip()
+                    parts = [p.strip() for p in cleaned_line.split("|")]
+                    fields = {}
+                    for p in parts:
+                        if ":" in p:
+                            k, v = p.split(":", 1)
+                            fields[k.strip().lower().replace(" ", "_")] = v.strip()
+
+                    task_desc = (
+                        fields.get("task")
+                        or fields.get("task_name")
+                        or fields.get("action")
+                        or fields.get("action_item")
+                        or fields.get("item")
+                        or fields.get("title")
+                    )
+                    if task_desc:
+                        assignee = (
+                            fields.get("owner")
+                            or fields.get("assignee")
+                            or fields.get("assigned_to")
+                            or fields.get("lead")
+                            or FALLBACK_NOT_SPECIFIED
+                        )
+                        deadline = (
+                            fields.get("due_date")
+                            or fields.get("deadline")
+                            or fields.get("target_date")
+                            or fields.get("due")
+                            or FALLBACK_NOT_SPECIFIED
+                        )
+                        status = fields.get("status") or fields.get("state") or "Open"
+                        priority = fields.get("priority") or fields.get("severity") or "Medium"
+                        notes = fields.get("notes") or fields.get("note") or fields.get("details") or ""
+                        evidence = line[:250]
+
+                        action_items.append(
+                            ActionItem(
+                                action_id=f"ACT-{act_counter:02d}",
+                                action=task_desc,
+                                assignee=assignee,
+                                deadline=deadline,
+                                status=status,
+                                priority=priority,
+                                evidence=evidence,
+                                source=source
+                            )
+                        )
+                        act_counter += 1
+
+                        # If status or notes indicate a blocker, also record it
+                        if "block" in status.lower() or "block" in notes.lower() or "waiting" in notes.lower():
+                            blockers.append(
+                                BlockerItem(
+                                    title=f"Blocker on {task_desc}",
+                                    description=f"{task_desc}: {notes}" if notes else f"{task_desc} is {status}",
+                                    impact=f"Delivery risk for {task_desc}",
+                                    status="Active",
+                                    owner=assignee if assignee != FALLBACK_NOT_SPECIFIED else "Unassigned",
+                                    evidence=evidence,
+                                    source=source
+                                )
+                            )
+                        continue
+
+                # Case 2: Blocker detection
+                if any(k in lower for k in ["blocker:", "blocked:", "is blocked", "currently blocked", "waiting for"]):
+                    desc = re.sub(r'(?i)^(?:[0-9]+\.|\-|\*)\s*(?:blocker|blocked):\s*', '', line).strip()
+                    blockers.append(
+                        BlockerItem(
+                            title=desc[:60],
+                            description=desc,
+                            impact="Schedule and delivery delay",
+                            status="Active",
+                            evidence=line[:250],
+                            source=source
+                        )
+                    )
+
+                # Case 3: Pending decision detection
+                elif any(k in lower for k in ["decision:", "pending decision:", "decided:"]):
+                    desc = re.sub(r'(?i)^(?:[0-9]+\.|\-|\*)\s*(?:decision|pending decision):\s*', '', line).strip()
+                    decisions.append(
+                        PendingDecision(
+                            decision=desc,
+                            status="Pending",
+                            evidence=line[:250],
+                            source=source
+                        )
+                    )
+
+                # Case 4: Unresolved issue / bug detection
+                elif any(k in lower for k in ["issue:", "defect:", "bug:", "impediment:"]):
+                    desc = re.sub(r'(?i)^(?:[0-9]+\.|\-|\*)\s*(?:issue|defect|bug):\s*', '', line).strip()
+                    issues.append(
+                        UnresolvedIssue(
+                            issue=desc,
+                            status="Open",
+                            evidence=line[:250],
+                            source=source
+                        )
+                    )
+
+                # Case 5: Explicit action item or task line
+                elif any(k in lower for k in ["action item:", "action:", "todo:", "task:"]):
+                    desc = re.sub(r'(?i)^(?:[0-9]+\.|\-|\*)\s*(?:action item|action|todo|task):\s*', '', line).strip()
+                    action_items.append(
+                        ActionItem(
+                            action_id=f"ACT-{act_counter:02d}",
+                            action=desc,
+                            assignee=FALLBACK_NOT_SPECIFIED,
+                            deadline=FALLBACK_NOT_SPECIFIED,
+                            status="Open",
+                            priority="Medium",
+                            evidence=line[:250],
+                            source=source
+                        )
+                    )
+                    act_counter += 1
 
         return BlockerActionOutput(
             blockers=blockers,
