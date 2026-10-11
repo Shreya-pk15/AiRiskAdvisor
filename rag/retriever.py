@@ -16,8 +16,15 @@ class Retriever:
 
     @staticmethod
     def automatic_top_k(chunk_count: int) -> int:
-        """Scale retrieval depth with workspace size while bounding model context."""
-        return min(10, max(3, math.ceil(math.sqrt(max(1, chunk_count)))))
+        """Scale top_k retrieval depth smoothly based on workspace chunk volume."""
+        if chunk_count <= 1:
+            return 3
+        elif chunk_count <= 25:
+            return 5
+        elif chunk_count <= 50:
+            return 8
+        else:
+            return 10
 
     def __init__(
         self,
@@ -31,7 +38,7 @@ class Retriever:
         self,
         query: str,
         project_name: str,
-        top_k: int = 5
+        top_k: Optional[int] = None
     ) -> List[Dict[str, Any]]:
         """
         Retrieve relevant text chunks for a given query string within a specific project.
@@ -39,7 +46,7 @@ class Retriever:
         Args:
             query (str): User question string.
             project_name (str): Associated project name.
-            top_k (int): Number of top chunks to retrieve (default: 5).
+            top_k (int, optional): Number of top chunks to retrieve. If None, retrieves naturally based on available chunks.
 
         Returns:
             List[Dict[str, Any]]: Retrieved text chunks with distance metrics and source metadata.

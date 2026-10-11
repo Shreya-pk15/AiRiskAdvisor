@@ -7,13 +7,36 @@ complete isolation (e.g., Project A collection will never return results for Pro
 
 import os
 import re
+import shutil
+import atexit
 import chromadb
 from chromadb.config import Settings
 from typing import List, Dict, Any, Optional
 
+_REGISTERED_PERSIST_DIRS = set()
+
+
+def cleanup_chroma_db(persist_dir: Optional[str] = None):
+    """Clean up and delete ChromaDB persistent directory on app exit or shutdown."""
+    target_dirs = [persist_dir] if persist_dir else list(_REGISTERED_PERSIST_DIRS)
+    if not target_dirs:
+        env_dir = os.getenv("CHROMA_PERSIST_DIR", "./data/chroma")
+        target_dirs = [os.path.abspath(env_dir)]
+
+    for d in target_dirs:
+        if d and os.path.exists(d):
+            try:
+                shutil.rmtree(d, ignore_errors=True)
+            except Exception:
+                pass
+
+
+# Register global exit handler to delete ChromaDB when user stops or exits the app
+atexit.register(cleanup_chroma_db)
+
 
 class VectorStoreManager:
-    """Manages persistent ChromaDB vector store operations."""
+    """Manages persistent ChromaDB vector store operations with automatic exit cleanup."""
 
     def __init__(self, persist_dir: Optional[str] = None):
         """
@@ -27,10 +50,11 @@ class VectorStoreManager:
         
         self.persist_dir = os.path.abspath(persist_dir)
         os.makedirs(self.persist_dir, exist_ok=True)
+        _REGISTERED_PERSIST_DIRS.add(self.persist_dir)
 
         self.client = chromadb.PersistentClient(
             path=self.persist_dir,
-            settings=Settings(anonymized_telemetry=False)
+            settings=Settings(anonymized_telemetry=False, allow_reset=True)
         )
 
     def _sanitize_collection_name(self, project_name: str) -> str:
@@ -139,15 +163,15 @@ class VectorStoreManager:
         self,
         project_name: str,
         query_embedding: List[float],
-        top_k: int = 5
+        top_k: Optional[int] = None
     ) -> List[Dict[str, Any]]:
         """
-        Query the project collection for top_k most similar text chunks.
+        Query the project collection for most similar text chunks.
 
         Args:
             project_name (str): Target project.
             query_embedding (List[float]): User question vector embedding.
-            top_k (int): Number of results to retrieve.
+            top_k (int, optional): Number of results to retrieve. If None, naturally retrieves up to all available chunks.
 
         Returns:
             List[Dict[str, Any]]: Retrieved chunks with distance scores and metadata.
@@ -158,8 +182,8 @@ class VectorStoreManager:
         if count == 0:
             return []
 
-        # Ensure top_k does not exceed total count in collection
-        actual_top_k = min(top_k, count)
+        # If top_k is not specified, naturally retrieve all available chunks
+        actual_top_k = count if top_k is None else min(max(1, top_k), count)
 
         results = collection.query(
             query_embeddings=[query_embedding],
@@ -205,3 +229,15 @@ class VectorStoreManager:
             self.client.delete_collection(name=coll_name)
         except Exception:
             pass
+
+    def reset_database(self):
+        """Reset and completely delete all ChromaDB collections and persistent storage."""
+        try:
+            self.client.reset()
+        except Exception:
+            pass
+        if os.path.exists(self.persist_dir):
+            try:
+                shutil.rmtree(self.persist_dir, ignore_errors=True)
+            except Exception:
+                pass

@@ -64,31 +64,46 @@ class GroqProvider(BaseLLMProvider):
         timeout: Optional[int] = None
     ) -> str:
         """
-        Generate raw text using Groq API with timeout safety.
+        Generate raw text using Groq API with timeout safety and size capping.
         """
         client = self._get_client()
         eff_timeout = timeout if timeout is not None else self.timeout
 
+        # Keep prompt within model TPM token budget
+        eff_prompt = prompt if len(prompt) <= 10000 else prompt[:10000] + "\n\n[...truncated for token budget...]"
+
         messages = []
         if system_instruction:
             messages.append({"role": "system", "content": system_instruction})
-        messages.append({"role": "user", "content": prompt})
+        messages.append({"role": "user", "content": eff_prompt})
 
-        def _call():
+        def _call(msgs):
             response = client.chat.completions.create(
                 model=self.model_name,
-                messages=messages,
+                messages=msgs,
                 temperature=0.1
             )
             return response.choices[0].message.content if response and response.choices else ""
 
         with ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(_call)
+            future = executor.submit(_call, messages)
             try:
                 return future.result(timeout=eff_timeout)
             except FuturesTimeoutError:
                 raise TimeoutError(f"Groq API request timed out after {eff_timeout} seconds.")
             except Exception as e:
+                err_str = str(e).lower()
+                if "413" in err_str or "request too large" in err_str or "rate_limit_exceeded" in err_str:
+                    # Retry with heavily truncated prompt on 413
+                    compact_msgs = [
+                        {"role": "user", "content": prompt[:6000] + "\n\n[...truncated...]" if len(prompt) > 6000 else prompt}
+                    ]
+                    if system_instruction:
+                        compact_msgs.insert(0, {"role": "system", "content": system_instruction})
+                    try:
+                        return _call(compact_msgs)
+                    except Exception:
+                        pass
                 raise RuntimeError(f"Groq API generation error: {e}") from e
 
     def generate_structured(
@@ -103,7 +118,7 @@ class GroqProvider(BaseLLMProvider):
         Automatically falls back to alternative models on 429 rate-limit errors.
         """
         # Build list of models to try: primary + fallbacks from env
-        fallback_env = os.getenv("GROQ_FALLBACK_MODELS", "llama3-8b-8192,gemma2-9b-it")
+        fallback_env = os.getenv("GROQ_FALLBACK_MODELS", "openai/gpt-oss-20b,openai/gpt-oss-120b")
         fallback_models = [m.strip() for m in fallback_env.split(",") if m.strip()]
         models_to_try = [self.model_name] + [m for m in fallback_models if m != self.model_name]
 
@@ -152,8 +167,8 @@ class GroqProvider(BaseLLMProvider):
         client = self._get_client()
         eff_timeout = timeout if timeout is not None else self.timeout
 
-        # Build schema instructions to enforce Pydantic structure in prompt
-        schema_json = json.dumps(response_schema.model_json_schema(), indent=2)
+        # Build compact schema instructions (avoiding multi-line indent tokens)
+        schema_json = json.dumps(response_schema.model_json_schema(), separators=(",", ":"))
         system_prompt = system_instruction or "You are a helpful AI assistant."
         full_system = (
             f"{system_prompt}\n\n"
@@ -162,8 +177,11 @@ class GroqProvider(BaseLLMProvider):
             f"Do not include any explanation or markdown formatting outside of the JSON object."
         )
 
+        # Budget prompt to stay safely under Groq TPM limits (approx ~8500 chars)
+        safe_prompt = prompt if len(prompt) <= 8500 else prompt[:8500] + "\n\n[...truncated for token budget...]"
+
         # Groq json_object mode requires the word 'json' in user message
-        user_prompt = prompt
+        user_prompt = safe_prompt
         if "json" not in user_prompt.lower():
             user_prompt = f"{user_prompt}\n\nPlease output valid JSON."
 
@@ -172,12 +190,16 @@ class GroqProvider(BaseLLMProvider):
             {"role": "user", "content": user_prompt}
         ]
 
-        def _call():
+        def _call_with_prompt(current_user_prompt: str):
+            curr_messages = [
+                {"role": "system", "content": full_system},
+                {"role": "user", "content": current_user_prompt}
+            ]
             # Attempt 1: native Groq json_object mode
             try:
                 response = client.chat.completions.create(
                     model=model_id,
-                    messages=messages,
+                    messages=curr_messages,
                     response_format={"type": "json_object"},
                     temperature=0.1
                 )
@@ -188,13 +210,16 @@ class GroqProvider(BaseLLMProvider):
                         return raw_content
             except Exception as e:
                 err_str = str(e)
-                # Re-raise rate limit errors immediately so outer fallback loop can try next model
+                err_lower = err_str.lower()
+                # If 413 request too large, re-raise to trigger auto-recovery trim below
+                if "413" in err_str or "request too large" in err_lower:
+                    raise
                 if "rate_limit_exceeded" in err_str or "429" in err_str:
                     raise
                 # For json_validate_failed or other grammar issues, fall through to attempt 2
                 pass
 
-            # Attempt 2: prompt-enforced raw JSON generation (no response_format constraint)
+            # Attempt 2: prompt-enforced raw JSON generation
             fallback_messages = [
                 {
                     "role": "system",
@@ -205,7 +230,7 @@ class GroqProvider(BaseLLMProvider):
                         f"Respond ONLY with valid JSON. Do not include markdown codeblocks, thinking tags, or explanation."
                     ),
                 },
-                {"role": "user", "content": f"{prompt}\n\nOutput VALID RAW JSON ONLY."}
+                {"role": "user", "content": f"{current_user_prompt}\n\nOutput VALID RAW JSON ONLY."}
             ]
             response = client.chat.completions.create(
                 model=model_id,
@@ -214,6 +239,18 @@ class GroqProvider(BaseLLMProvider):
             )
             raw_content = response.choices[0].message.content if response and response.choices else "{}"
             return raw_content
+
+        def _call():
+            try:
+                return _call_with_prompt(user_prompt)
+            except Exception as exc:
+                err_str = str(exc)
+                err_lower = err_str.lower()
+                # On 413 / Request too large, automatically recover by reducing message size
+                if ("413" in err_str or "request too large" in err_lower or "reduce your message size" in err_lower) and len(user_prompt) > 4000:
+                    trimmed = user_prompt[:5000] + "\n\n[...truncated for model token limits...]\nPlease output valid JSON."
+                    return _call_with_prompt(trimmed)
+                raise
 
         with ThreadPoolExecutor(max_workers=1) as executor:
             future = executor.submit(_call)

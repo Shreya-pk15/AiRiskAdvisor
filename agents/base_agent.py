@@ -145,3 +145,48 @@ class BaseAgent(ABC):
         if not chunks:
             return "No project context was available for analysis."
         return "\n\n".join(f"[Source: {self._extract_source(chunk)}]\n{chunk.get('text', '')}" for chunk in chunks)
+
+    @classmethod
+    def _build_budgeted_context(
+        cls,
+        normalized_chunks: Sequence[Dict[str, Any]],
+        max_chars: int = 10000,
+    ) -> Tuple[str, List[str]]:
+        """Construct context lines from normalized chunks capped to max_chars budget to prevent TPM limit errors."""
+        context_lines: List[str] = []
+        unique_sources: List[str] = []
+        seen_sources: set[str] = set()
+        current_len = 0
+
+        for idx, chunk in enumerate(normalized_chunks, 1):
+            meta = chunk.get("metadata", {}) if isinstance(chunk, dict) else {}
+            src = meta.get("source") or chunk.get("source") or "Unknown Document"
+            doc_id = meta.get("document_id", "N/A")
+            chunk_id = meta.get("chunk_id", f"chunk_{idx}")
+            page = meta.get("page", "N/A")
+
+            src_str = str(src).strip()
+            if src_str and src_str not in seen_sources:
+                seen_sources.add(src_str)
+                unique_sources.append(src_str)
+
+            text = str(chunk.get("text", "")).strip()
+            if not text:
+                continue
+
+            entry = (
+                f"--- CHUNK {idx} | Source: {src_str} | Page: {page} | ChunkID: {chunk_id} | DocID: {doc_id} ---\n"
+                f"{text}\n"
+            )
+
+            if current_len + len(entry) > max_chars:
+                remaining = max_chars - current_len
+                if remaining > 250:
+                    context_lines.append(entry[:remaining] + "\n[...content truncated for context budget...]\n")
+                break
+
+            context_lines.append(entry)
+            current_len += len(entry)
+
+        return "\n".join(context_lines), unique_sources
+

@@ -212,26 +212,7 @@ class ScopeExtractionAgent(BaseAgent):
     def _extract_with_llm(self, retrieved_chunks: Sequence[Dict[str, Any]]) -> ScopeExtractionOutput:
         """Construct context and generate structured output via GeminiProvider."""
         normalized_chunks = self._normalize_chunks(retrieved_chunks)
-        
-        # Build concise context block including chunk_id and source metadata
-        context_lines = []
-        unique_sources = set()
-
-        for idx, chunk in enumerate(normalized_chunks, 1):
-            meta = chunk.get("metadata", {})
-            src = meta.get("source") or chunk.get("source") or "Unknown Document"
-            doc_id = meta.get("document_id", "N/A")
-            chunk_id = meta.get("chunk_id", f"chunk_{idx}")
-            page = meta.get("page", "N/A")
-
-            unique_sources.add(src)
-
-            context_lines.append(
-                f"--- CHUNK {idx} | Source: {src} | Page: {page} | ChunkID: {chunk_id} | DocID: {doc_id} ---\n"
-                f"{chunk.get('text', '')}\n"
-            )
-
-        context_text = "\n".join(context_lines)
+        context_text, unique_sources = self._build_budgeted_context(normalized_chunks, max_chars=9000)
         prompt = SCOPE_PROMPT.format(context=context_text)
 
         system_instruction = (

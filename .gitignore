@@ -1,6 +1,5 @@
 # Environment variables
 .env
-.env.example
 
 # Python cache & virtualenv
 __pycache__/
@@ -10,8 +9,10 @@ __pycache__/
 venv/
 ENV/
 
-# ChromaDB data directory
+# ChromaDB data directories
 data/chroma/
+data/test_chroma/
+*.sqlite3
 
 # Pytest / coverage
 .pytest_cache/
