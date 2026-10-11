@@ -191,6 +191,36 @@ def run_all_project_agents(proj_name: str, top_k_val: int):
         blocker_ok = store_agent_result(b_res, f"blocker_data_{proj_name}", "Blocker & Action extraction")
         blocker_data = st.session_state.get(f"blocker_data_{proj_name}", {})
 
+        # Seed document generation data if not already synthesized
+        if blocker_data.get("action_items"):
+            st.session_state[f"doc_action_items_{proj_name}"] = blocker_data.get("action_items", [])
+        if risk_data.get("risks"):
+            st.session_state[f"doc_risk_register_{proj_name}"] = [
+                {
+                    "risk_id": r.get("risk_id", f"R-{i:02d}"),
+                    "risk_description": r.get("description", r.get("risk", "Identified risk")),
+                    "category": r.get("category", "General"),
+                    "severity": r.get("severity", "Medium"),
+                    "mitigation": r.get("recommended_action", "Monitor and mitigate"),
+                    "owner": "Project Team",
+                    "status": "Open",
+                    "source": r.get("source", "Project Documents")
+                }
+                for i, r in enumerate(risk_data.get("risks", []), 1)
+            ]
+        if scope_data.get("deliverables"):
+            st.session_state[f"doc_user_stories_{proj_name}"] = [
+                {
+                    "story_id": f"US-{i:02d}",
+                    "user_story": f"As a project stakeholder, I want {d.get('name', 'deliverable')} so that project outcomes are achieved.",
+                    "description": d.get("description", "Deliverable output"),
+                    "priority": "Must Have",
+                    "acceptance_criteria": [f"{d.get('name', 'Feature')} implemented to specification", "Functionality verified"],
+                    "source": d.get("source", "Project Documents")
+                }
+                for i, d in enumerate(scope_data.get("deliverables", []), 1)
+            ]
+
         # Step 4: Health Scoring
         health_scorer = ProjectHealthScorer()
         h_res = health_scorer.evaluate_health(
@@ -774,83 +804,256 @@ with nav_tabs[2]:
             # ── Timeline References Table ──────────────────────────────────
             st.markdown("<br>", unsafe_allow_html=True)
             with st.container(border=True):
-                st.markdown("##### 🗓️ Timeline References")
-                timeline_refs = scope_data.get("timeline", [])
+                st.markdown("##### 🗓️ Timeline References & Schedule Windows")
+                timeline_refs = scope_data.get("timeline", []) or []
+                # Fallback to milestone target dates if no explicit timeline references returned
+                if not timeline_refs:
+                    raw_ms = scope_data.get("milestones", []) or []
+                    for idx, m in enumerate(raw_ms, 1):
+                        m_target = str(m.get("target_date") or "").strip()
+                        if m_target and m_target != NS:
+                            timeline_refs.append({
+                                "label": f"{m.get('name', f'Milestone {idx}')} Target Date",
+                                "value": m_target,
+                                "start_date": "—",
+                                "deadline": m_target,
+                                "source": m.get("source") or m.get("document_name") or "Project Documents"
+                            })
+
                 if timeline_refs:
                     tl_rows = []
-                    for t in timeline_refs:
+                    for idx, t in enumerate(timeline_refs, 1):
                         label = str(t.get("label") or "").strip()
                         value = str(t.get("value") or "").strip()
                         start = str(t.get("start_date") or "").strip()
                         end = str(t.get("end_date") or "").strip()
                         deadline = str(t.get("deadline") or "").strip()
-                        src = str(t.get("source") or "").strip()
+                        src = str(t.get("source") or t.get("document_name") or "").strip()
                         if not label or label == NS:
                             continue
                         tl_rows.append({
-                            "Reference": label,
-                            "Value / Date": value if value and value != NS else "—",
-                            "Start": start if start and start != NS else "—",
-                            "End / Deadline": (deadline or end) if (deadline or end) and (deadline or end) != NS else "—",
-                            "Source": src if src and src != NS else "—"
+                            "ID": f"TL-{idx:02d}",
+                            "Timeline Reference": label,
+                            "Value / Timeframe": value if value and value != NS else "—",
+                            "Start Date": start if start and start != NS else "—",
+                            "Deadline / End": (deadline or end) if (deadline or end) and (deadline or end) != NS else "—",
+                            "Source Document": src if src and src != NS else "—"
                         })
                     if tl_rows:
                         render_dataframe(pd.DataFrame(tl_rows), use_container_width=True, hide_index=True)
                     else:
-                        st.caption("No timeline references documented.")
+                        st.caption("No specific timeline references documented.")
                 else:
                     st.caption("No timeline references documented.")
 
-
-
-    # Inner Tab 2: Blockers
+    # Inner Tab 2: Blockers & Actions
     with inner_blocker_tab:
         if not blocker_data:
-            st.info("No blocker data extracted yet.")
+            st.info("No blocker data extracted yet. Click **[ ⚡ Index & Analyze Documents ]** in Manage Documents.")
         else:
-            st.markdown("##### 🛑 Blocker Urgency Matrix")
-            b_list = blocker_data.get("blockers", [])
-            st.plotly_chart(create_blocker_urgency_matrix(b_list), use_container_width=True, config={"displayModeBar": False}, key="blockers_page_matrix")
+            b_list = blocker_data.get("blockers", []) or []
+            decisions = blocker_data.get("pending_decisions", []) or []
+            issues = blocker_data.get("unresolved_issues", []) or []
+            actions = blocker_data.get("action_items", []) or []
+
+            # KPI Summary Badges Row
+            b_col1, b_col2, b_col3, b_col4 = st.columns(4)
+            with b_col1:
+                st.markdown(f"""
+                    <div class="kpi-wrapper" style="padding: 10px 14px;">
+                        <div class="kpi-icon-circle kpi-icon-coral">🛑</div>
+                        <div class="kpi-info">
+                            <div class="kpi-title">Blockers</div>
+                            <div class="kpi-val" style="font-size: 1.3rem;">{len(b_list)}</div>
+                        </div>
+                    </div>
+                """, unsafe_allow_html=True)
+            with b_col2:
+                st.markdown(f"""
+                    <div class="kpi-wrapper" style="padding: 10px 14px;">
+                        <div class="kpi-icon-circle kpi-icon-amber">⏳</div>
+                        <div class="kpi-info">
+                            <div class="kpi-title">Decisions</div>
+                            <div class="kpi-val" style="font-size: 1.3rem;">{len(decisions)}</div>
+                        </div>
+                    </div>
+                """, unsafe_allow_html=True)
+            with b_col3:
+                st.markdown(f"""
+                    <div class="kpi-wrapper" style="padding: 10px 14px;">
+                        <div class="kpi-icon-circle kpi-icon-violet">⚠️</div>
+                        <div class="kpi-info">
+                            <div class="kpi-title">Issues</div>
+                            <div class="kpi-val" style="font-size: 1.3rem;">{len(issues)}</div>
+                        </div>
+                    </div>
+                """, unsafe_allow_html=True)
+            with b_col4:
+                st.markdown(f"""
+                    <div class="kpi-wrapper" style="padding: 10px 14px;">
+                        <div class="kpi-icon-circle kpi-icon-mint">📋</div>
+                        <div class="kpi-info">
+                            <div class="kpi-title">Action Items</div>
+                            <div class="kpi-val" style="font-size: 1.3rem;">{len(actions)}</div>
+                        </div>
+                    </div>
+                """, unsafe_allow_html=True)
 
             st.markdown("<br>", unsafe_allow_html=True)
-            st.markdown("##### 📋 Action Items Table")
-            actions = blocker_data.get("action_items", [])
-            if actions:
-                a_rows = [
-                    {
-                        "Action": a.get("action", "Not specified"),
-                        "Owner": a.get("assignee") or a.get("owner", "Team"),
-                        "Deadline": a.get("deadline") or a.get("due_date", "TBD"),
-                        "Priority": a.get("priority", "Medium"),
-                        "Status": a.get("status", "Open")
-                    }
-                    for a in actions
-                ]
-                render_dataframe(pd.DataFrame(a_rows), use_container_width=True, hide_index=True)
+            st.markdown("##### 🛑 Blocker Urgency Matrix")
+            st.plotly_chart(create_blocker_urgency_matrix(b_list), use_container_width=True, config={"displayModeBar": False}, key="blockers_page_matrix")
 
-    # Inner Tab 3: Risks
+            # 1. Documented Blockers Table
+            st.markdown("<br>", unsafe_allow_html=True)
+            with st.container(border=True):
+                st.markdown(f"##### 🛑 Documented Project Blockers ({len(b_list)})")
+                if b_list:
+                    b_rows = [
+                        {
+                            "ID": f"BLK-{i:02d}",
+                            "Blocker Description": b.get("description", "Not specified"),
+                            "Impact": b.get("impact", "High impact on schedule/delivery"),
+                            "Owner": b.get("owner", "Unassigned"),
+                            "Status": b.get("status", "Active"),
+                            "Source Document": b.get("source", "Project Documents")
+                        }
+                        for i, b in enumerate(b_list, 1)
+                    ]
+                    render_dataframe(pd.DataFrame(b_rows), use_container_width=True, hide_index=True)
+                else:
+                    st.caption("No critical blockers documented.")
+
+            # 2. Pending Decisions Table
+            st.markdown("<br>", unsafe_allow_html=True)
+            with st.container(border=True):
+                st.markdown(f"##### ⏳ Pending Decisions & Approvals ({len(decisions)})")
+                if decisions:
+                    dec_rows = [
+                        {
+                            "ID": f"DEC-{i:02d}",
+                            "Decision Required": d.get("decision", d.get("title", "Pending decision")),
+                            "Owner / Approver": d.get("owner", "Stakeholders"),
+                            "Status": d.get("status", "Pending"),
+                            "Source Document": d.get("source", "Project Documents")
+                        }
+                        for i, d in enumerate(decisions, 1)
+                    ]
+                    render_dataframe(pd.DataFrame(dec_rows), use_container_width=True, hide_index=True)
+                else:
+                    st.caption("No pending decisions documented.")
+
+            # 3. Unresolved Issues Table
+            st.markdown("<br>", unsafe_allow_html=True)
+            with st.container(border=True):
+                st.markdown(f"##### ⚠️ Unresolved Technical & Defect Issues ({len(issues)})")
+                if issues:
+                    iss_rows = [
+                        {
+                            "ID": f"ISS-{i:02d}",
+                            "Issue / Defect Description": iss.get("issue", iss.get("title", "Documented defect")),
+                            "Status": iss.get("status", "Open"),
+                            "Source Document": iss.get("source", "Project Documents")
+                        }
+                        for i, iss in enumerate(issues, 1)
+                    ]
+                    render_dataframe(pd.DataFrame(iss_rows), use_container_width=True, hide_index=True)
+                else:
+                    st.caption("No unresolved technical defects documented.")
+
+            # 4. Action Items Table
+            st.markdown("<br>", unsafe_allow_html=True)
+            with st.container(border=True):
+                st.markdown(f"##### 📋 Action Items & Task Assignments ({len(actions)})")
+                if actions:
+                    a_rows = [
+                        {
+                            "ID": f"ACT-{i:02d}",
+                            "Action Item": a.get("action", "Documented task"),
+                            "Assignee": a.get("assignee") or a.get("owner", "Unassigned"),
+                            "Deadline": a.get("deadline") or a.get("due_date", "TBD"),
+                            "Priority": a.get("priority", "Medium"),
+                            "Status": a.get("status", "Open"),
+                            "Source Document": a.get("source", "Project Documents")
+                        }
+                        for i, a in enumerate(actions, 1)
+                    ]
+                    render_dataframe(pd.DataFrame(a_rows), use_container_width=True, hide_index=True)
+                else:
+                    st.caption("No action items documented.")
+
+    # Inner Tab 3: Risks & Forecasting
     with inner_risk_tab:
         if not risk_data:
-            st.info("No risk analysis data yet.")
+            st.info("No risk analysis data yet. Click **[ ⚡ Index & Analyze Documents ]** in Manage Documents.")
         else:
-            r_list = risk_data.get("risks", [])
+            deliv_status = risk_data.get("delivery_status", "Insufficient Data")
+            forecast = risk_data.get("delivery_forecast", {}) or {}
+            forecast_reason = forecast.get("reason") or "Delivery evaluation completed from documented evidence."
+            forecast_analysis = forecast.get("forecast_analysis") or "Forward-looking trajectory shows work in progress against planned scope and targets."
+            concerns = forecast.get("concerns", []) or []
+            rec_actions = forecast.get("recommended_actions", []) or []
+            r_list = risk_data.get("risks", []) or []
+
+            # ── Forward-Looking Delivery Forecast Banner & Card ──
+            status_style = "badge-mint" if deliv_status == "On Track" else ("badge-amber" if deliv_status == "At Risk" else ("badge-coral" if deliv_status == "Delayed" else "badge-grey"))
+            st.markdown(f"""
+                <div class="narrative-card" style="margin-bottom: 1.2rem;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.6rem;">
+                        <span style="font-size: 1.15rem; font-weight: 800; color: #1F2340;">🔮 Forward-Looking Delivery Forecast</span>
+                        <span class="{status_style}" style="font-size: 0.85rem; padding: 4px 14px;">{deliv_status.upper()}</span>
+                    </div>
+                    <div style="font-size: 0.95rem; font-weight: 600; color: #5B5875; margin-bottom: 0.6rem;">
+                        Summary: {forecast_reason}
+                    </div>
+                    <div style="font-size: 0.92rem; color: #2D314E; line-height: 1.6; background: rgba(255,255,255,0.7); padding: 12px 16px; border-radius: 8px; border-left: 3px solid #7C5CFC;">
+                        {forecast_analysis}
+                    </div>
+                </div>
+            """, unsafe_allow_html=True)
+
+            # Two-Column Delivery Forecast Insights
+            fc_c1, fc_c2 = st.columns(2, gap="medium")
+            with fc_c1:
+                with st.container(border=True):
+                    st.markdown("##### ⚠️ Documented Delivery Concerns")
+                    if concerns:
+                        for c in concerns:
+                            st.markdown(f"• {c}")
+                    else:
+                        st.caption("No critical delivery blockers currently identified.")
+
+            with fc_c2:
+                with st.container(border=True):
+                    st.markdown("##### 💡 Proactive Mitigation Actions")
+                    if rec_actions:
+                        for ra in rec_actions:
+                            st.markdown(f"💡 {ra}")
+                    else:
+                        st.caption("Continue monitoring standard project delivery milestones.")
+
+            st.markdown("<br>", unsafe_allow_html=True)
             st.markdown("##### ⚠️ Risk Priority Matrix")
             st.plotly_chart(create_risk_priority_matrix(r_list), use_container_width=True, config={"displayModeBar": False}, key="risks_page_matrix")
 
             st.markdown("<br>", unsafe_allow_html=True)
-            st.markdown(f"##### ⚠️ Filterable Risks Log ({len(r_list)})")
-            if r_list:
-                r_rows = [
-                    {
-                        "Category": r.get("category", "General"),
-                        "Risk": r.get("description", r.get("title", "Risk")),
-                        "Severity": r.get("severity", "Medium"),
-                        "Evidence": r.get("evidence", "N/A"),
-                        "Recommended Action": r.get("recommended_action", "Monitor")
-                    }
-                    for r in r_list
-                ]
-                render_dataframe(pd.DataFrame(r_rows), use_container_width=True, hide_index=True)
+            with st.container(border=True):
+                st.markdown(f"##### ⚠️ Filterable Risks Log ({len(r_list)})")
+                if r_list:
+                    r_rows = [
+                        {
+                            "ID": r.get("risk_id", f"R-{i:02d}"),
+                            "Category": r.get("category", "General"),
+                            "Risk Description": r.get("description", r.get("title", "Risk")),
+                            "Severity": r.get("severity", "Medium"),
+                            "Evidence": r.get("evidence", "—"),
+                            "Recommended Action": r.get("recommended_action", "Monitor and mitigate"),
+                            "Source Document": r.get("source", "Project Documents")
+                        }
+                        for i, r in enumerate(r_list, 1)
+                    ]
+                    render_dataframe(pd.DataFrame(r_rows), use_container_width=True, hide_index=True)
+                else:
+                    st.caption("No evidence-based risks documented.")
 
 
 # =============================================================================
@@ -944,21 +1147,27 @@ with nav_tabs[3]:
                     st.success("Action items generated successfully.")
 
         a_doc = st.session_state.get(f"doc_action_items_{project_name}", [])
+        if not a_doc and blocker_data and blocker_data.get("action_items"):
+            a_doc = blocker_data.get("action_items", [])
+            st.session_state[f"doc_action_items_{project_name}"] = a_doc
+
         if a_doc:
             df_a_doc = pd.DataFrame([
                 {
                     "ID": a.get("action_id", f"ACT-{i:02d}"),
-                    "Action": a.get("action", "Not specified"),
-                    "Assignee": a.get("assignee", "Unassigned"),
-                    "Deadline": a.get("deadline", "TBD"),
-                    "Status": a.get("status", "Open")
+                    "Action Item": a.get("action", a.get("description", "Not specified")),
+                    "Assignee": a.get("assignee") or a.get("owner", "Unassigned"),
+                    "Deadline": a.get("deadline") or a.get("due_date", "TBD"),
+                    "Priority": a.get("priority", "Medium"),
+                    "Status": a.get("status", "Open"),
+                    "Source Document": a.get("source", "Project Documents")
                 }
                 for i, a in enumerate(a_doc, 1)
             ])
             render_dataframe(df_a_doc, use_container_width=True, hide_index=True)
             st.download_button("📥 Download Action Items (CSV)", df_a_doc.to_csv(index=False).encode('utf-8'), f"{project_name}_action_items.csv", "text/csv")
         else:
-            st.caption("No action items generated yet.")
+            st.caption("No action items generated yet. Click '⚡ Generate Action Items' above.")
 
 
 # =============================================================================

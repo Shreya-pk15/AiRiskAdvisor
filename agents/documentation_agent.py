@@ -664,6 +664,20 @@ class DocumentationAgent(BaseAgent):
                     )
                 )
 
+            if not cleaned_actions and actions:
+                for idx, a in enumerate(actions, 1):
+                    act_name = a.get("action") or a.get("description") or "Documented action item"
+                    cleaned_actions.append(ActionItem(
+                        action_id=f"ACT-{idx:02d}",
+                        action=str(act_name),
+                        assignee=str(a.get("assignee") or a.get("owner") or FALLBACK_NOT_SPECIFIED),
+                        priority=str(a.get("priority") or "Medium"),
+                        deadline=str(a.get("deadline") or a.get("due_date") or FALLBACK_NOT_SPECIFIED),
+                        status=str(a.get("status") or "Open"),
+                        source=str(a.get("source") or FALLBACK_NOT_SPECIFIED),
+                        evidence=str(a.get("evidence") or FALLBACK_NOT_SPECIFIED)
+                    ))
+
             deduped_sources = self._deduplicate(list(sources.union(parsed_output.sources)))
             result_output = ActionItemsOutput(action_items=cleaned_actions, sources=deduped_sources)
 
@@ -681,14 +695,28 @@ class DocumentationAgent(BaseAgent):
 
         except Exception as exc:
             logger.error("Action items generation error: %s", exc, exc_info=True)
+            fallback_items = []
+            if blocker_data:
+                for idx, a in enumerate(blocker_data.get("action_items", []), 1):
+                    act_name = a.get("action") or a.get("description") or "Documented action item"
+                    fallback_items.append(ActionItem(
+                        action_id=f"ACT-{idx:02d}",
+                        action=str(act_name),
+                        assignee=str(a.get("assignee") or a.get("owner") or FALLBACK_NOT_SPECIFIED),
+                        priority=str(a.get("priority") or "Medium"),
+                        deadline=str(a.get("deadline") or a.get("due_date") or FALLBACK_NOT_SPECIFIED),
+                        status=str(a.get("status") or "Open"),
+                        source=str(a.get("source") or FALLBACK_NOT_SPECIFIED),
+                        evidence=str(a.get("evidence") or FALLBACK_NOT_SPECIFIED)
+                    ))
             return {
-                "data": ActionItemsOutput().model_dump(),
+                "data": ActionItemsOutput(action_items=fallback_items, sources=blocker_data.get("sources", []) if blocker_data else []).model_dump(),
                 "metadata": {
                     "agent_name": agent_name,
                     "document_type": doc_type,
                     "provider": provider_name if "provider_name" in locals() else "Unknown",
                     "execution_time_seconds": round(time.time() - start_time, 2),
-                    "status": "Failed",
+                    "status": "Partial" if fallback_items else "Failed",
                     "error": str(exc),
                 },
             }

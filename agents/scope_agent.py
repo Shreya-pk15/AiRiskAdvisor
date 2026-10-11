@@ -258,6 +258,16 @@ class ScopeExtractionAgent(BaseAgent):
                 parsed_output.milestones.append(item)
                 known_milestones.add(key)
 
+        known_timeline = {
+            (item.label.strip().casefold(), item.value.strip().casefold())
+            for item in parsed_output.timeline
+        }
+        for item in self._extract_structured_timeline(normalized_chunks):
+            key = (item.label.casefold(), item.value.casefold())
+            if key not in known_timeline:
+                parsed_output.timeline.append(item)
+                known_timeline.add(key)
+
         return self._apply_grounding_sanitization(parsed_output)
 
     @staticmethod
@@ -354,6 +364,101 @@ class ScopeExtractionAgent(BaseAgent):
 
         return milestones
 
+    @staticmethod
+    def _extract_structured_timeline(
+        chunks: Sequence[Dict[str, Any]],
+    ) -> List[TimelineItem]:
+        """Recover explicit timeline references, dates, and schedule windows from document text and records."""
+        timeline_items = []
+        seen = set()
+        timeline_keywords = {
+            "start_date": "Project Start Date",
+            "end_date": "Project End Date",
+            "kickoff": "Project Kickoff",
+            "go_live": "Target Go-Live Date",
+            "deadline": "Project Deadline",
+            "due_date": "Target Due Date",
+            "duration": "Project Duration",
+            "planned_sprint": "Planned Sprint Schedule",
+            "actual_sprint": "Actual Sprint Schedule",
+            "phase": "Project Phase",
+            "milestone": "Project Milestone",
+        }
+
+        for chunk in chunks:
+            metadata = chunk.get("metadata", {})
+            source = str(metadata.get("source") or chunk.get("source") or "Unknown Document")
+            text = chunk.get("text", "")
+
+            # 1. Parse pipe-separated key-value records
+            for line in text.splitlines():
+                line_clean = line.strip()
+                if not line_clean:
+                    continue
+                for label, value in re.findall(r"(?:^|\|)\s*([^:|]+):\s*([^|]+)", line_clean):
+                    norm_label = re.sub(r"[^a-z0-9]+", "_", label.casefold()).strip("_")
+                    val_clean = value.strip()
+                    if not val_clean or val_clean == FALLBACK_NOT_SPECIFIED:
+                        continue
+
+                    matched_key = None
+                    for kw, std_label in timeline_keywords.items():
+                        if kw in norm_label:
+                            matched_key = std_label
+                            break
+                    if not matched_key and any(k in norm_label for k in ["date", "timeline", "schedule", "window"]):
+                        matched_key = label.strip().title()
+
+                    if matched_key:
+                        key = (matched_key.casefold(), val_clean.casefold())
+                        if key not in seen:
+                            seen.add(key)
+                            page = metadata.get("page")
+                            timeline_items.append(TimelineItem(
+                                label=matched_key,
+                                value=val_clean,
+                                start_date=val_clean if "start" in norm_label else None,
+                                end_date=val_clean if ("end" in norm_label or "due" in norm_label or "deadline" in norm_label) else None,
+                                deadline=val_clean if ("due" in norm_label or "deadline" in norm_label) else None,
+                                source=source,
+                                document_name=source,
+                                document_id=metadata.get("document_id"),
+                                page=page if isinstance(page, int) else None,
+                                chunk_id=metadata.get("chunk_id"),
+                                evidence=line_clean,
+                            ))
+
+            # 2. Match natural date sentences like "Project start date: Sept 1, 2025" or "Deadline: Oct 30"
+            date_patterns = [
+                (r"(?:project\s+start(?:\s+date)?|kickoff)\s*[:\-–]\s*([A-Za-z0-9\s,\/]+?)(?:\.|$|\n)", "Project Start Date"),
+                (r"(?:project\s+end(?:\s+date)?|target\s+completion|final\s+deadline)\s*[:\-–]\s*([A-Za-z0-9\s,\/]+?)(?:\.|$|\n)", "Project End Date"),
+                (r"(?:go[\s\-]live(?:\s+date)?)\s*[:\-–]\s*([A-Za-z0-9\s,\/]+?)(?:\.|$|\n)", "Target Go-Live Date"),
+                (r"(?:duration|timeline)\s*[:\-–]\s*([A-Za-z0-9\s,\/\-]+?)(?:\.|$|\n)", "Project Duration"),
+            ]
+            for pat, std_lbl in date_patterns:
+                for match in re.finditer(pat, text, flags=re.IGNORECASE):
+                    val = match.group(1).strip()
+                    if val and len(val) < 80 and val != FALLBACK_NOT_SPECIFIED:
+                        key = (std_lbl.casefold(), val.casefold())
+                        if key not in seen:
+                            seen.add(key)
+                            page = metadata.get("page")
+                            timeline_items.append(TimelineItem(
+                                label=std_lbl,
+                                value=val,
+                                start_date=val if "start" in std_lbl.lower() else None,
+                                end_date=val if "end" in std_lbl.lower() or "go-live" in std_lbl.lower() else None,
+                                deadline=val if "end" in std_lbl.lower() else None,
+                                source=source,
+                                document_name=source,
+                                document_id=metadata.get("document_id"),
+                                page=page if isinstance(page, int) else None,
+                                chunk_id=metadata.get("chunk_id"),
+                                evidence=match.group(0).strip(),
+                            ))
+
+        return timeline_items
+
     def _apply_grounding_sanitization(self, output: ScopeExtractionOutput) -> ScopeExtractionOutput:
         """Enforce strict grounding rules across all extracted items."""
         for g in output.project_goals:
@@ -432,6 +537,11 @@ class ScopeExtractionAgent(BaseAgent):
                 deliverables.append(DeliverableItem(name=text[:80], description=text[:150], source=source, evidence=text[:150]))
             if "milestone" in text.lower() or "deadline" in text.lower():
                 milestones.append(MilestoneItem(name=text[:80], source=source, evidence=text[:150]))
+
+        # Include structured extracted milestones, timeline, and responsibilities
+        milestones.extend(self._extract_structured_milestones(chunks))
+        timeline.extend(self._extract_structured_timeline(chunks))
+        responsibilities.extend(self._extract_structured_responsibilities(chunks))
 
         return ScopeExtractionOutput(
             project_goals=goals,
