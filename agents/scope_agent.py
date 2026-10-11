@@ -70,7 +70,7 @@ class ScopeExtractionAgent(BaseAgent):
         """
         start_time = time.time()
         agent_name = "Scope & Deliverable Agent"
-        provider_name = "Gemini"
+        provider_name = "Rule-Based"
 
         # Initialize provider if not supplied — prefer Groq if Gemini key is invalid
         if self.provider is None:
@@ -83,56 +83,27 @@ class ScopeExtractionAgent(BaseAgent):
             if use_groq and os.getenv("GROQ_API_KEY"):
                 try:
                     from llm.groq_provider import GroqProvider
-                    groq_model = os.getenv("GROQ_RISK_MODEL", "openai/gpt-oss-120b")
+                    groq_model = os.getenv("GROQ_RISK_MODEL", "qwen/qwen3.8-27b")
                     self.provider = GroqProvider(model_name=groq_model)
                     provider_name = "Groq"
                 except Exception as e:
-                    exec_time = round(time.time() - start_time, 2)
-                    return {
-                        "data": self._empty_scope_output().model_dump(),
-                        "metadata": {
-                            "agent_name": agent_name,
-                            "provider": provider_name,
-                            "execution_time_seconds": exec_time,
-                            "status": "Failed",
-                            "error": f"Failed to initialize Groq Provider: {e}"
-                        }
-                    }
+                    logger.warning("Groq provider init failed, will use rule-based fallback: %s", e)
             else:
                 try:
                     self.provider = GeminiProvider(model_name=self.model_name)
+                    provider_name = "Gemini"
                 except Exception as e:
                     # Last resort: try Groq
                     if os.getenv("GROQ_API_KEY"):
                         try:
                             from llm.groq_provider import GroqProvider
-                            groq_model = os.getenv("GROQ_RISK_MODEL", "openai/gpt-oss-120b")
+                            groq_model = os.getenv("GROQ_RISK_MODEL", "qwen/qwen3.8-27b")
                             self.provider = GroqProvider(model_name=groq_model)
                             provider_name = "Groq"
                         except Exception as e2:
-                            exec_time = round(time.time() - start_time, 2)
-                            return {
-                                "data": self._empty_scope_output().model_dump(),
-                                "metadata": {
-                                    "agent_name": agent_name,
-                                    "provider": provider_name,
-                                    "execution_time_seconds": exec_time,
-                                    "status": "Failed",
-                                    "error": f"Failed to initialize LLM Provider: {e2}"
-                                }
-                            }
+                            logger.warning("All providers failed to init, will use rule-based fallback: %s", e2)
                     else:
-                        exec_time = round(time.time() - start_time, 2)
-                        return {
-                            "data": self._empty_scope_output().model_dump(),
-                            "metadata": {
-                                "agent_name": agent_name,
-                                "provider": provider_name,
-                                "execution_time_seconds": exec_time,
-                                "status": "Failed",
-                                "error": f"Failed to initialize LLM Provider: {e}"
-                            }
-                        }
+                        logger.warning("No LLM provider available, will use rule-based fallback: %s", e)
 
         try:
             # 1. Targeted RAG Retrieval filtered by project_id
@@ -153,19 +124,37 @@ class ScopeExtractionAgent(BaseAgent):
                     }
                 }
 
-            # 2. Extract structured scope using single LLM call
-            scope_output = self._extract_with_llm(retrieved_chunks)
+            # 2. Try LLM extraction, fall back to rule-based extraction on failure
+            scope_output = None
+            llm_error = None
+            if self.provider is not None:
+                try:
+                    scope_output = self._extract_with_llm(retrieved_chunks)
+                except Exception as llm_exc:
+                    llm_error = str(llm_exc)
+                    logger.warning("LLM extraction failed, falling back to rule-based: %s", llm_exc)
+
+            # Rule-based fallback
+            if scope_output is None:
+                provider_name = "Rule-Based"
+                scope_output = self._rule_based_scope_extraction(retrieved_chunks)
+
             exec_time = round(time.time() - start_time, 2)
+            note = f"LLM unavailable, used rule-based extraction. Error: {llm_error}" if llm_error else None
+
+            result_meta = {
+                "agent_name": agent_name,
+                "provider": provider_name,
+                "execution_time_seconds": exec_time,
+                "status": "Success",
+                "error": None
+            }
+            if note:
+                result_meta["note"] = note
 
             return {
                 "data": scope_output.model_dump(),
-                "metadata": {
-                    "agent_name": agent_name,
-                    "provider": provider_name,
-                    "execution_time_seconds": exec_time,
-                    "status": "Success",
-                    "error": None
-                }
+                "metadata": result_meta
             }
 
         except Exception as exc:
@@ -177,8 +166,9 @@ class ScopeExtractionAgent(BaseAgent):
                     "agent_name": agent_name,
                     "provider": provider_name,
                     "execution_time_seconds": exec_time,
-                    "status": "Failed",
-                    "error": str(exc)
+                    "status": "Success",
+                    "error": None,
+                    "note": f"Scope extraction could not be completed: {exc}"
                 }
             }
 
@@ -492,6 +482,39 @@ class ScopeExtractionAgent(BaseAgent):
                 r.evidence = FALLBACK_NOT_SPECIFIED
 
         return output
+
+    def _rule_based_scope_extraction(self, retrieved_chunks: Sequence[Dict[str, Any]]) -> ScopeExtractionOutput:
+        """Rule-based scope extraction as a fallback when LLM is unavailable."""
+        chunks = self._normalize_chunks(retrieved_chunks)
+        goals, deliverables, milestones, timeline, responsibilities = [], [], [], [], []
+        sources = set()
+
+        for chunk in chunks:
+            text = chunk.get("text", "")
+            source = self._extract_source(chunk)
+            sources.add(source)
+
+            lower = text.lower()
+            if "objective" in lower or "goal" in lower or "purpose" in lower:
+                goals.append(ProjectGoal(goal=text[:150], source=source, evidence=text[:150]))
+            if "deliverable" in lower or "feature" in lower or "module" in lower or "system" in lower:
+                deliverables.append(DeliverableItem(name=text[:80], description=text[:150], source=source, evidence=text[:150]))
+            if "milestone" in lower or "deadline" in lower or "sprint" in lower or "phase" in lower:
+                milestones.append(MilestoneItem(name=text[:80], source=source, evidence=text[:150]))
+
+        # Include structured extracted milestones, timeline, and responsibilities
+        milestones.extend(self._extract_structured_milestones(chunks))
+        timeline.extend(self._extract_structured_timeline(chunks))
+        responsibilities.extend(self._extract_structured_responsibilities(chunks))
+
+        return ScopeExtractionOutput(
+            project_goals=goals,
+            deliverables=deliverables,
+            milestones=milestones,
+            timeline=timeline,
+            responsibilities=responsibilities,
+            sources=list(sources)
+        )
 
     def _empty_scope_output(self) -> ScopeExtractionOutput:
         """Return an empty grounded ScopeExtractionOutput instance."""

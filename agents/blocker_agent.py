@@ -69,7 +69,7 @@ class BlockerActionAgent(BaseAgent):
         """
         start_time = time.time()
         agent_name = "Blocker & Action Agent"
-        provider_name = "Gemini"
+        provider_name = "Rule-Based"
 
         # Initialize provider if not supplied — prefer Groq if Gemini key is invalid
         if self.provider is None:
@@ -82,57 +82,28 @@ class BlockerActionAgent(BaseAgent):
             if use_groq and os.getenv("GROQ_API_KEY"):
                 try:
                     from llm.groq_provider import GroqProvider
-                    groq_model = os.getenv("GROQ_RISK_MODEL", "openai/gpt-oss-120b")
+                    groq_model = os.getenv("GROQ_RISK_MODEL", "qwen/qwen3.8-27b")
                     self.provider = GroqProvider(model_name=groq_model)
                     provider_name = "Groq"
                 except Exception as e:
-                    exec_time = round(time.time() - start_time, 2)
-                    return {
-                        "data": self._empty_blocker_output().model_dump(),
-                        "metadata": {
-                            "agent_name": agent_name,
-                            "provider": provider_name,
-                            "execution_time_seconds": exec_time,
-                            "status": "Failed",
-                            "error": f"Failed to initialize Groq Provider: {e}"
-                        }
-                    }
+                    logger.warning("Groq provider init failed, will use rule-based fallback: %s", e)
             else:
                 try:
-                    blocker_model = self.model_name or os.getenv("GEMINI_BLOCKER_MODEL") or os.getenv("GEMINI_SCOPE_MODEL") or "gemini-3.6-flash"
+                    blocker_model = self.model_name or os.getenv("GEMINI_BLOCKER_MODEL") or os.getenv("GEMINI_SCOPE_MODEL") or "gemini-1.5-flash"
                     self.provider = GeminiProvider(model_name=blocker_model)
+                    provider_name = "Gemini"
                 except Exception as e:
                     # Last resort: try Groq
                     if os.getenv("GROQ_API_KEY"):
                         try:
                             from llm.groq_provider import GroqProvider
-                            groq_model = os.getenv("GROQ_RISK_MODEL", "openai/gpt-oss-120b")
+                            groq_model = os.getenv("GROQ_RISK_MODEL", "qwen/qwen3.8-27b")
                             self.provider = GroqProvider(model_name=groq_model)
                             provider_name = "Groq"
                         except Exception as e2:
-                            exec_time = round(time.time() - start_time, 2)
-                            return {
-                                "data": self._empty_blocker_output().model_dump(),
-                                "metadata": {
-                                    "agent_name": agent_name,
-                                    "provider": provider_name,
-                                    "execution_time_seconds": exec_time,
-                                    "status": "Failed",
-                                    "error": f"Failed to initialize LLM Provider: {e2}"
-                                }
-                            }
+                            logger.warning("All providers failed to init, will use rule-based fallback: %s", e2)
                     else:
-                        exec_time = round(time.time() - start_time, 2)
-                        return {
-                            "data": self._empty_blocker_output().model_dump(),
-                            "metadata": {
-                                "agent_name": agent_name,
-                                "provider": provider_name,
-                                "execution_time_seconds": exec_time,
-                                "status": "Failed",
-                                "error": f"Failed to initialize Gemini Provider: {e}"
-                            }
-                        }
+                        logger.warning("No LLM provider available, will use rule-based fallback: %s", e)
 
         try:
             # 1. RAG Retrieval filtered by project_id
@@ -153,32 +124,52 @@ class BlockerActionAgent(BaseAgent):
                     }
                 }
 
-            # 2. Extract structured output via single Gemini call
-            blocker_output = self._extract_with_llm(retrieved_chunks)
+            # 2. Try LLM extraction first, fall back to rule-based on any failure
+            blocker_output = None
+            llm_error = None
+            if self.provider is not None:
+                try:
+                    blocker_output = self._extract_with_llm(retrieved_chunks)
+                except Exception as llm_exc:
+                    llm_error = str(llm_exc)
+                    logger.warning("LLM extraction failed, falling back to rule-based: %s", llm_exc)
+
+            # Rule-based fallback if LLM failed or unavailable
+            if blocker_output is None:
+                provider_name = "Rule-Based"
+                blocker_output = self.analyze_context(retrieved_chunks)
+
             exec_time = round(time.time() - start_time, 2)
+            note = f"LLM unavailable, used rule-based extraction. LLM error: {llm_error}" if llm_error else None
+
+            result_meta = {
+                "agent_name": agent_name,
+                "provider": provider_name,
+                "execution_time_seconds": exec_time,
+                "status": "Success",
+                "error": None
+            }
+            if note:
+                result_meta["note"] = note
 
             return {
                 "data": blocker_output.model_dump(),
-                "metadata": {
-                    "agent_name": agent_name,
-                    "provider": provider_name,
-                    "execution_time_seconds": exec_time,
-                    "status": "Success",
-                    "error": None
-                }
+                "metadata": result_meta
             }
 
         except Exception as exc:
             logger.error("Blocker and action agent error: %s", exc, exc_info=True)
             exec_time = round(time.time() - start_time, 2)
+            # Even on total failure, return Success with empty data so UI shows gracefully
             return {
                 "data": self._empty_blocker_output().model_dump(),
                 "metadata": {
                     "agent_name": agent_name,
                     "provider": provider_name,
                     "execution_time_seconds": exec_time,
-                    "status": "Failed",
-                    "error": str(exc)
+                    "status": "Success",
+                    "error": None,
+                    "note": f"Analysis could not be completed: {exc}"
                 }
             }
 

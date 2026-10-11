@@ -136,17 +136,24 @@ def resolve_agent_provider(gemini_model_id: str):
 
 
 def store_agent_result(result: Dict[str, Any], session_key: str, agent_name: str) -> bool:
-    """Store successful extraction results and report agent failures accurately."""
+    """Store agent results and report any issues. Stores data even on partial failures so the UI can display it."""
     metadata = result.get("metadata", {})
-    if metadata.get("status") != "Success":
-        error = metadata.get("error") or "The agent returned an unsuccessful status."
-        st.error(f"{agent_name} failed: {error}")
+    status = metadata.get("status", "")
+    error = metadata.get("error")
+    note = metadata.get("note")
+    data = result.get("data", {})
+
+    # Always store whatever data we have
+    if data:
+        st.session_state[session_key] = data
+
+    if status != "Success":
+        err_msg = error or "The agent returned an unsuccessful status."
+        st.warning(f"⚠️ {agent_name}: {err_msg}")
         return False
 
-    st.session_state[session_key] = result.get("data", {})
-    note = metadata.get("note")
     if note:
-        st.warning(f"{agent_name}: {note}")
+        st.info(f"ℹ️ {agent_name}: {note}")
     return True
 
 

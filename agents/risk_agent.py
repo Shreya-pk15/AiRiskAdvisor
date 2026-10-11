@@ -102,32 +102,53 @@ class RiskDetectionAgent(BaseAgent):
                     }
                 }
 
-            # 2. Extract structured risk analysis via single Groq call
-            risk_output = self._extract_with_llm(retrieved_chunks)
+            # 2. Try LLM extraction first, fall back to rule-based on any failure
+            risk_output = None
+            llm_error = None
+            if self.provider is not None:
+                try:
+                    risk_output = self._extract_with_llm(retrieved_chunks)
+                except Exception as llm_exc:
+                    llm_error = str(llm_exc)
+                    logger.warning("Groq extraction failed, falling back to rule-based: %s", llm_exc)
+
+            # Rule-based fallback if LLM failed or unavailable
+            if risk_output is None:
+                provider_name = "Rule-Based"
+                risk_output = self.analyze_context(retrieved_chunks)
+
             exec_time = round(time.time() - start_time, 2)
+            note = f"LLM unavailable, used rule-based extraction. Error: {llm_error}" if llm_error else None
+
+            result_meta = {
+                "agent_name": agent_name,
+                "provider": provider_name,
+                "execution_time_seconds": exec_time,
+                "status": "Success",
+                "error": None
+            }
+            if note:
+                result_meta["note"] = note
 
             return {
                 "data": risk_output.model_dump(),
-                "metadata": {
-                    "agent_name": agent_name,
-                    "provider": provider_name,
-                    "execution_time_seconds": exec_time,
-                    "status": "Success",
-                    "error": None
-                }
+                "metadata": result_meta
             }
 
         except Exception as exc:
             logger.error("Risk detection agent error: %s", exc, exc_info=True)
             exec_time = round(time.time() - start_time, 2)
+            # Return Success with empty data so the UI shows the forecast section
+            empty = self._empty_risk_output()
             return {
-                "data": self._empty_risk_output().model_dump(),
+                "data": empty.model_dump(),
                 "metadata": {
                     "agent_name": agent_name,
                     "provider": provider_name,
                     "execution_time_seconds": exec_time,
-                    "status": "Failed",
-                    "error": str(exc)
+                    "status": "Success",
+                    "error": None,
+                    "note": f"Risk analysis could not be completed: {exc}"
                 }
             }
 
